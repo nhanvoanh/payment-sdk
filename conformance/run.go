@@ -12,7 +12,7 @@ type rule struct {
 	id            string
 	op            connector.Operation
 	createPartner bool   // cần Create gọi đối tác (Harness.CreateCallsPartner)
-	grpcSkip      string // khác rỗng: lượt /grpc không kiểm được gì, bỏ với lý do này
+	grpcSkip      string // khác rỗng: lượt /grpc theo thiết kế không kiểm được gì (vào NotChecked với lý do này)
 	check         func(e *env)
 }
 
@@ -61,7 +61,11 @@ func Check(tb testing.TB, h Harness) Report {
 			if viaGRPC {
 				code += grpcSuffix
 			}
-			findings, skip := runOne(tb, h, r, code, viaGRPC)
+			findings, skip, notChecked := runOne(tb, h, r, code, viaGRPC)
+			if notChecked != "" {
+				rep.NotChecked = append(rep.NotChecked, code+": "+notChecked)
+				continue
+			}
 			for _, d := range findings {
 				rep.Findings = append(rep.Findings, Finding{Rule: code, Detail: d})
 			}
@@ -74,24 +78,25 @@ func Check(tb testing.TB, h Harness) Report {
 }
 
 // runOne chạy một lượt của một luật; h.New và grpctest.New chạy trên goroutine của test vì có thể gọi tb.Fatal.
-func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]string, string) {
+// Trả (finding, lý do bỏ, lý do không kiểm theo thiết kế).
+func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]string, string, string) {
 	if r.createPartner && !h.CreateCallsPartner {
-		return nil, "Create không gọi đối tác (Harness.CreateCallsPartner sai)"
-	}
-	if viaGRPC && r.grpcSkip != "" {
-		return nil, r.grpcSkip
+		return nil, "Create không gọi đối tác (Harness.CreateCallsPartner sai)", ""
 	}
 	c, p := h.New(tb)
 	e := &env{h: h, c: c, orig: c, p: p, rule: code, ops: declared(c)}
 	if r.op != "" && !e.ops[r.op] {
-		return nil, "connector không khai thao tác " + string(r.op)
+		return nil, "connector không khai thao tác " + string(r.op), ""
+	}
+	if viaGRPC && r.grpcSkip != "" {
+		return nil, "", r.grpcSkip
 	}
 	if viaGRPC {
 		client, srv, err := loopback(tb, c)
 		e.srv = srv
 		if err != nil {
 			if r.id != "ID-1" {
-				return nil, "không dựng được kênh gRPC vì Describe lỗi (xem ID-1/grpc): " + err.Error()
+				return nil, "không dựng được kênh gRPC vì Describe lỗi (xem ID-1/grpc): " + err.Error(), ""
 			}
 			e.fail("Describe qua gRPC lỗi: %v; cần mô tả được (tên không đổi, đủ webhook_acks hợp lệ, không panic); core không nạp được connector, mọi thanh toán qua đối tác này đều không chạy", err)
 		} else {
@@ -114,15 +119,25 @@ func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]stri
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return append([]string(nil), e.findings...), e.skip
+	return append([]string(nil), e.findings...), e.skip, ""
 }
 
-// Run chạy Check và báo mỗi lượt của mỗi luật thành một subtest: vi phạm là t.Errorf, luật bị bỏ là t.Skip.
+// Run chạy Check và báo mỗi lượt của mỗi luật thành một subtest: vi phạm là t.Errorf, luật bị bỏ là
+// t.Skip. Lượt không kiểm được theo thiết kế (NotChecked) chỉ được t.Log, không thành subtest.
 func Run(t *testing.T, h Harness) {
 	t.Helper()
 	rep := Check(t, h)
+	notChecked := map[string]bool{}
+	for _, s := range rep.NotChecked {
+		code, _, _ := strings.Cut(s, ": ")
+		notChecked[code] = true
+		t.Log("không kiểm theo thiết kế: " + s)
+	}
 	for _, r := range rules {
 		for _, code := range []string{r.id, r.id + grpcSuffix} {
+			if notChecked[code] {
+				continue
+			}
 			t.Run(code, func(t *testing.T) {
 				for _, f := range rep.Findings {
 					if f.Rule == code {

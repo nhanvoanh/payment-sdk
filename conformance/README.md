@@ -34,8 +34,13 @@ thất bại), mọi lỗi khác là chưa rõ. Vì vậy:
 Ở lượt `/grpc` của phần "đối tác treo", proxy có hạn 300 ms + 2 s còn server bọc ctx của handler bằng hạn
 300 ms, nên câu trả lời của connector (đúng hay sai) luôn tới được proxy: kết quả tất định.
 
-Hai lượt `/grpc` luôn bị bỏ vì proxy không cho kiểm được gì: `WHK-6/grpc` (proxy trả ack từ bảng lấy một
-lần lúc Describe) và `CTX-1/grpc` (proxy gặp ctx đã huỷ thì trả về ngay, không gửi).
+`Report` tách hai loại "không chạy":
+
+- `Skipped`: lý do nằm ở phía developer — thao tác không khai, `CreateCallsPartner` sai, bước chuẩn bị hỏng,
+  `Describe` qua gRPC hỏng. Nên đọc; có thể phải xử lý.
+- `NotChecked`: lượt mà bộ luật theo thiết kế không kiểm được, không bao giờ là việc của developer. Hiện có
+  `WHK-6/grpc` (proxy trả ack từ bảng lấy một lần lúc Describe) và `CTX-1/grpc` (proxy gặp ctx đã huỷ thì
+  trả về ngay, không gửi). `Run` chỉ `t.Log` các mục này, không tạo subtest.
 
 ## Luật
 

@@ -59,10 +59,15 @@ type Harness struct {
 // Finding là một vi phạm: Rule là mã luật, Detail nêu điều thấy được, điều mong đợi và hậu quả.
 type Finding struct{ Rule, Detail string }
 
-// Report là kết quả Check. Skipped có dạng "MÃ: lý do".
+// Report là kết quả Check. Skipped và NotChecked có dạng "MÃ: lý do".
 type Report struct {
 	Findings []Finding
-	Skipped  []string
+	// Skipped: luật không chạy vì phía developer — connector không khai thao tác, CreateCallsPartner sai,
+	// bước chuẩn bị (Create ở ModeNormal) hỏng, hay Describe qua gRPC hỏng. Developer nên đọc và có thể phải xử lý.
+	Skipped []string
+	// NotChecked: lượt mà bộ luật theo thiết kế không kiểm được (ví dụ proxy gRPC không chuyển lời gọi tới
+	// connector). Không bao giờ là việc của developer; chỉ để biết phạm vi kiểm.
+	NotChecked []string
 }
 
 const (

@@ -575,6 +575,9 @@ func TestCheck_SkipsUndeclaredOperations(t *testing.T) {
 			}
 		}
 	}
+	if !slices.Equal(r.NotChecked, []string{"CTX-1/grpc: proxy gRPC gặp ctx đã huỷ thì trả về ngay mà không gửi, connector không nhận được lời gọi nào để kiểm"}) {
+		t.Errorf("thao tác không khai thì WHK-6/grpc vào Skipped, chỉ CTX-1/grpc vào NotChecked: %v", r.NotChecked)
+	}
 	for _, s := range r.Skipped {
 		for _, never := range []string{"ID-1:", "ID-2:", "ID-3:", "PAY-1:", "PAY-2:", "PAY-7:", "CTX-1:"} {
 			if strings.HasPrefix(s, never) {
@@ -889,19 +892,22 @@ func TestCheck_SetupFailureIsSkippedNotFinding(t *testing.T) {
 	}
 }
 
-// expectOnlyGRPCSkips: connector khai đủ thao tác chỉ được bỏ hai lượt /grpc vốn không kiểm được gì.
+// expectOnlyGRPCSkips: connector khai đủ thao tác thì Skipped rỗng, NotChecked đúng hai lượt /grpc theo thiết kế.
 func expectOnlyGRPCSkips(t *testing.T, r conformance.Report) {
 	t.Helper()
+	if len(r.Skipped) != 0 {
+		t.Errorf("connector khai đủ thao tác không được bỏ luật nào: %v", r.Skipped)
+	}
 	var codes []string
-	for _, s := range r.Skipped {
+	for _, s := range r.NotChecked {
 		code, reason, _ := strings.Cut(s, ": ")
 		if reason == "" {
-			t.Errorf("Skipped thiếu lý do: %q", s)
+			t.Errorf("NotChecked thiếu lý do: %q", s)
 		}
 		codes = append(codes, code)
 	}
 	if !slices.Equal(codes, []string{"WHK-6/grpc", "CTX-1/grpc"}) {
-		t.Errorf("chỉ WHK-6/grpc và CTX-1/grpc được bỏ: %v", r.Skipped)
+		t.Errorf("NotChecked phải đúng WHK-6/grpc và CTX-1/grpc: %v", r.NotChecked)
 	}
 }
 
