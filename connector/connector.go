@@ -14,31 +14,38 @@ type Connector interface {
 	CreatePayment(ctx context.Context, req CreatePaymentRequest) (CreatePaymentResult, error)
 }
 
+// PaymentQuerier ứng với OpQueryPayment.
 type PaymentQuerier interface {
 	QueryPayment(ctx context.Context, req QueryPaymentRequest) (PaymentStatus, error)
 }
 
+// WebhookReceiver ứng với OpWebhook.
 type WebhookReceiver interface {
 	ParseWebhook(ctx context.Context, raw RawWebhook) (ProviderEvent, error)
 	AckWebhook(outcome WebhookOutcome) (status int, body []byte, contentType string)
 }
 
+// Redirecter ứng với OpRedirect.
 type Redirecter interface {
 	ParseRedirect(ctx context.Context, raw RawWebhook) (ProviderEvent, error)
 }
 
+// Charger ứng với OpCharge.
 type Charger interface {
 	Charge(ctx context.Context, req ChargeRequest) (ChargeResult, error)
 }
 
+// Canceler ứng với OpCancel.
 type Canceler interface {
 	CancelPayment(ctx context.Context, req CancelRequest) (CancelResult, error)
 }
 
+// Refunder ứng với OpRefund.
 type Refunder interface {
 	CreateRefund(ctx context.Context, req RefundRequest) (RefundResult, error)
 }
 
+// RefundQuerier ứng với OpQueryRefund.
 type RefundQuerier interface {
 	QueryRefund(ctx context.Context, req QueryRefundRequest) (RefundStatus, error)
 }
@@ -80,9 +87,10 @@ type QueryPaymentRequest struct {
 }
 
 type PaymentStatus struct {
-	Found                         bool
-	Status                        Status
-	ProviderRef                   string
+	Found       bool
+	Status      Status
+	ProviderRef string
+	// AmountPaid.Amount == 0 nghĩa là đối tác không báo số tiền; core coi là đã thu đủ.
 	AmountPaid                    paykit.Money
 	PaidAt                        time.Time
 	Card                          *paykit.CardMasked
@@ -99,11 +107,14 @@ const (
 
 // ProviderEvent là sự kiện đã chuẩn hoá từ webhook hoặc redirect.
 type ProviderEvent struct {
-	EventID                       string
-	Kind                          EventKind
-	TransactionCode, RefundCode   string
-	ProviderRef                   string
-	Status                        Status
+	// EventID bắt buộc và phải giống hệt nhau qua mọi lần đối tác gửi lại cùng một sự kiện: core khử
+	// trùng theo (đối tác, EventID).
+	EventID                     string
+	Kind                        EventKind
+	TransactionCode, RefundCode string
+	ProviderRef                 string
+	Status                      Status
+	// AmountPaid.Amount == 0 nghĩa là đối tác không báo số tiền; core coi là đã thu đủ.
 	AmountPaid                    paykit.Money
 	PaidAt                        time.Time
 	Card                          *paykit.CardMasked
@@ -133,10 +144,11 @@ type ChargeRequest struct {
 type ChargeResult struct {
 	ProviderRef string
 	Status      Status
-	AmountPaid  paykit.Money
-	PaidAt      time.Time
-	NextAction  paykit.NextAction
-	Raw         RawExchange
+	// AmountPaid.Amount == 0 nghĩa là đối tác không báo số tiền; core coi là đã thu đủ.
+	AmountPaid paykit.Money
+	PaidAt     time.Time
+	NextAction paykit.NextAction
+	Raw        RawExchange
 }
 
 type CancelRequest struct {
@@ -144,6 +156,7 @@ type CancelRequest struct {
 }
 
 type CancelResult struct {
+	// Status phải là StatusCanceled thì lần huỷ mới được tính; trạng thái khác là chưa huỷ.
 	Status Status
 	Raw    RawExchange
 }
