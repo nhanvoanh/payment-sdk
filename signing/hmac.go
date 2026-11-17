@@ -25,16 +25,19 @@ func HMACSHA512(key, msg []byte) []byte {
 }
 
 // Equal so sánh hai MAC trong thời gian hằng (độ dài khác nhau thì false ngay).
-func Equal(a, b []byte) bool { return subtle.ConstantTimeCompare(a, b) == 1 }
+// Một trong hai rỗng thì false: hai chữ ký rỗng không được coi là khớp.
+func Equal(a, b []byte) bool {
+	return len(a) > 0 && len(b) > 0 && subtle.ConstantTimeCompare(a, b) == 1
+}
 
 // EqualHex so mac với chữ ký dạng hex. Chuỗi không giải mã được, hoặc mac rỗng, thì false.
 func EqualHex(mac []byte, hexSig string) bool {
 	sig, err := hex.DecodeString(hexSig)
-	return err == nil && len(mac) > 0 && Equal(mac, sig)
+	return err == nil && Equal(mac, sig)
 }
 
 // EqualBase64 so mac với chữ ký base64 chuẩn. Chuỗi không giải mã được, hoặc mac rỗng, thì false.
 func EqualBase64(mac []byte, b64Sig string) bool {
 	sig, err := base64.StdEncoding.DecodeString(b64Sig)
-	return err == nil && len(mac) > 0 && Equal(mac, sig)
+	return err == nil && Equal(mac, sig)
 }

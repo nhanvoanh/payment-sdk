@@ -4,6 +4,7 @@ package tokencache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -14,7 +15,9 @@ const (
 	defaultFetchTimeout = 10 * time.Second
 )
 
-// Fetch lấy token mới từ đối tác cùng thời điểm hết hạn.
+// Fetch lấy token mới từ đối tác cùng thời điểm hết hạn. Phải tôn trọng ctx: nếu không,
+// FetchTimeout không cứu được và người gọi không có hạn sẽ chờ mãi.
+// Token rỗng, hoặc expiresAt zero/đã qua, bị coi là lỗi.
 type Fetch func(ctx context.Context) (token string, expiresAt time.Time, err error)
 
 // Options: các trường zero dùng mặc định (Skew 30s, FetchTimeout 10s, Now = time.Now).
@@ -89,8 +92,15 @@ func (c *Cache) run(cl *call) {
 		if r := recover(); r != nil {
 			cl.tok, cl.err = "", fmt.Errorf("tokencache: fetch panic: %v", r)
 		}
+		// Goexit (recover trả nil) và token rỗng đều rơi vào đây: không bao giờ trao ("", nil).
+		if cl.err == nil && cl.tok == "" {
+			cl.err = errors.New("tokencache: fetch trả token rỗng")
+		}
 		c.mu.Lock()
-		if cl.err == nil && cl.tok != "" && cl.exp.After(c.opts.Now()) {
+		if cl.err == nil && !cl.exp.After(c.opts.Now()) {
+			cl.tok, cl.err = "", errors.New("tokencache: fetch trả token không có hạn hoặc đã hết hạn")
+		}
+		if cl.err == nil {
 			c.token, c.expires = cl.tok, cl.exp
 		}
 		c.inflight = nil

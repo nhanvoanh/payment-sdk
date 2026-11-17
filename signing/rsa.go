@@ -26,7 +26,7 @@ func ParseRSAPrivateKeyPEM(data []byte) (*rsa.PrivateKey, error) {
 	if err != nil {
 		k8, err8 := x509.ParsePKCS8PrivateKey(blk.Bytes)
 		if err8 != nil {
-			return nil, fmt.Errorf("signing: khoá riêng không đọc được: %w", err8)
+			return nil, fmt.Errorf("signing: khoá riêng không đọc được: %w", errors.Join(err, err8))
 		}
 		var ok bool
 		if key, ok = k8.(*rsa.PrivateKey); !ok {
@@ -67,16 +67,19 @@ func ParseRSAPublicKeyPEM(data []byte) (*rsa.PublicKey, error) {
 
 // RSASignSHA256 ký SHA-256 của msg theo PKCS#1 v1.5.
 func RSASignSHA256(key *rsa.PrivateKey, msg []byte) ([]byte, error) {
-	if key == nil {
+	if key == nil || key.N == nil {
 		return nil, errors.New("signing: khoá riêng nil")
+	}
+	if key.N.BitLen() < minRSABits { // khoá dựng tay cũng không được lọt qua đường ký
+		return nil, fmt.Errorf("signing: khoá RSA %d bit, tối thiểu %d", key.N.BitLen(), minRSABits)
 	}
 	sum := sha256.Sum256(msg)
 	return rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
 }
 
-// RSAVerifySHA256 kiểm chữ ký PKCS#1 v1.5 trên SHA-256 của msg; mọi đầu vào xấu đều cho false.
+// RSAVerifySHA256 kiểm chữ ký PKCS#1 v1.5 trên SHA-256 của msg; mọi đầu vào xấu và khoá dưới 2048 bit đều cho false.
 func RSAVerifySHA256(key *rsa.PublicKey, msg, sig []byte) bool {
-	if key == nil || key.N == nil {
+	if key == nil || key.N == nil || key.N.BitLen() < minRSABits {
 		return false
 	}
 	sum := sha256.Sum256(msg)

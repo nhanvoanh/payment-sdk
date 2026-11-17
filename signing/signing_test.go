@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,7 +34,7 @@ func TestEqual(t *testing.T) {
 	if !Equal(mac, append([]byte(nil), mac...)) {
 		t.Fatal("bằng nhau mà false")
 	}
-	if Equal(mac, mac[:len(mac)-1]) || Equal(mac, nil) || !Equal(nil, nil) {
+	if Equal(mac, mac[:len(mac)-1]) || Equal(mac, nil) || Equal(nil, mac) || Equal(nil, nil) || Equal([]byte{}, nil) {
 		t.Fatal("Equal sai ở biên")
 	}
 	if !EqualHex(mac, hex.EncodeToString(mac)) {
@@ -146,3 +147,29 @@ func TestParseRSAPublicKeyPEM(t *testing.T) {
 }
 
 func pkix0() pkix.Name { return pkix.Name{CommonName: "acme"} }
+
+func TestRSA_RejectsWeakHandBuiltKeys(t *testing.T) {
+	weak := genKey(t, 1024)
+	if _, err := RSASignSHA256(weak, []byte("m")); err == nil {
+		t.Fatal("ký bằng khoá 1024 bit phải lỗi")
+	}
+	strong := genKey(t, 2048)
+	sig, _ := RSASignSHA256(strong, []byte("m"))
+	if RSAVerifySHA256(&weak.PublicKey, []byte("m"), sig) {
+		t.Fatal("kiểm bằng khoá 1024 bit phải false")
+	}
+}
+
+func TestParseRSAPrivateKeyPEM_ReportsBothErrors(t *testing.T) {
+	_, err := ParseRSAPrivateKeyPEM(pemOf("PRIVATE KEY", []byte("rác")))
+	if err == nil {
+		t.Fatal("phải lỗi")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "PKCS") && !strings.Contains(msg, "x509") && !strings.Contains(msg, "asn1") {
+		t.Fatalf("lỗi không nêu nguyên nhân: %v", err)
+	}
+	if n := strings.Count(msg, "\n"); n < 1 {
+		t.Fatalf("muốn cả hai lỗi PKCS#1 và PKCS#8, got %q", msg)
+	}
+}

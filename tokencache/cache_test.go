@@ -218,7 +218,7 @@ func TestInvalidate_OnlyMatchingToken(t *testing.T) {
 	}
 }
 
-func TestGet_ZeroOrPastExpiryNotCached(t *testing.T) {
+func TestGet_ZeroOrPastExpiryIsErrorAndNotCached(t *testing.T) {
 	clk := newClock()
 	for name, exp := range map[string]time.Time{"zero": {}, "past": clk.now().Add(-time.Second)} {
 		var calls atomic.Int32
@@ -227,13 +227,69 @@ func TestGet_ZeroOrPastExpiryNotCached(t *testing.T) {
 			return "t", exp, nil
 		}, Options{Now: clk.now})
 		for i := 0; i < 2; i++ {
-			if tok, err := c.Get(context.Background()); err != nil || tok != "t" {
-				t.Fatalf("%s: %q %v", name, tok, err)
+			if tok, err := c.Get(context.Background()); err == nil || tok != "" {
+				t.Fatalf("%s: muốn lỗi và token rỗng, got %q %v", name, tok, err)
 			}
 		}
 		if calls.Load() != 2 {
 			t.Fatalf("%s: calls=%d, muốn 2 (không lưu)", name, calls.Load())
 		}
+	}
+}
+
+func TestGet_EmptyTokenIsError(t *testing.T) {
+	clk := newClock()
+	var calls atomic.Int32
+	c := New(func(_ context.Context) (string, time.Time, error) {
+		if calls.Add(1) == 1 {
+			return "", clk.now().Add(time.Hour), nil
+		}
+		return "ok", clk.now().Add(time.Hour), nil
+	}, Options{Now: clk.now})
+	if tok, err := c.Get(context.Background()); err == nil || tok != "" {
+		t.Fatalf("token rỗng phải là lỗi: %q %v", tok, err)
+	}
+	if tok, err := c.Get(context.Background()); err != nil || tok != "ok" {
+		t.Fatalf("lần sau phải thử lại: %q %v", tok, err)
+	}
+}
+
+func TestGet_GoexitInFetchIsErrorAndDoesNotWedge(t *testing.T) {
+	clk := newClock()
+	var calls atomic.Int32
+	c := New(func(_ context.Context) (string, time.Time, error) {
+		if calls.Add(1) == 1 {
+			runtime.Goexit()
+		}
+		return "ok", clk.now().Add(time.Hour), nil
+	}, Options{Now: clk.now})
+	if tok, err := c.Get(context.Background()); err == nil || tok != "" {
+		t.Fatalf("Goexit phải thành lỗi: %q %v", tok, err)
+	}
+	if tok, err := c.Get(context.Background()); err != nil || tok != "ok" {
+		t.Fatalf("lần sau phải thử lại: %q %v", tok, err)
+	}
+}
+
+func TestInvalidate_DuringFetchKeepsNewToken(t *testing.T) {
+	clk := newClock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	c := New(func(_ context.Context) (string, time.Time, error) {
+		close(started)
+		<-release
+		return "new", clk.now().Add(time.Hour), nil
+	}, Options{Now: clk.now})
+	done := make(chan string, 1)
+	go func() { tok, _ := c.Get(context.Background()); done <- tok }()
+	<-started
+	c.Invalidate("old") // 401 cũ đến giữa lúc đang làm mới
+	close(release)
+	if tok := <-done; tok != "new" {
+		t.Fatalf("tok=%q", tok)
+	}
+	if tok, err := c.Get(context.Background()); err != nil || tok != "new" {
+		t.Fatalf("token mới phải nằm trong cache: %q %v", tok, err)
 	}
 }
 
