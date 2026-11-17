@@ -20,7 +20,7 @@
 // Phản hồi HTTP nào đọc trọn thân, kể cả 4xx/5xx, là (*Response, nil): ý nghĩa của mã trạng thái do
 // connector quyết. net/http vẫn tự gửi lại request có thể phát lại trên kết nối tái dùng bị đóng (GET,
 // và POST có header Idempotency-Key/X-Idempotency-Key); POST không có các header đó không bao giờ bị
-// gửi lại.
+// gửi HAI lần sau khi đã ghi byte (request chưa ghi byte nào vẫn có thể được net/http gửi trên kết nối khác).
 package providerhttp
 
 import (
@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"sync/atomic"
@@ -112,25 +113,29 @@ func newClient(cfg Config, rt http.RoundTripper) (*Client, error) {
 		cfg.MaxRequestBytes = defaultMaxBytes
 	}
 	if rt == nil {
-		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.MaxIdleConns = cfg.MaxConns
-		tr.MaxIdleConnsPerHost = cfg.MaxConns
-		tr.MaxConnsPerHost = cfg.MaxConns
-		// Tắt HTTP/2 (xem doc gói): ForceAttemptHTTP2=false và TLSNextProto rỗng nhưng khác nil.
-		tr.ForceAttemptHTTP2 = false
-		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+		// Dựng transport tường minh thay vì Clone DefaultTransport để không thừa hưởng trạng thái ẩn:
+		// bản clone mang theo TLSClientConfig.NextProtos=[h2 http/1.1], khiến ta chào h2 trong ALPN trong
+		// khi chỉ nói được HTTP/1.1 và mọi request tới đối tác hỗ trợ h2 sẽ hỏng.
+		tc := &tls.Config{MinVersion: tls.VersionTLS12}
 		if cfg.TLSClientConfig != nil {
-			tc := cfg.TLSClientConfig.Clone()
-			protos := tc.NextProtos[:0:0]
-			for _, p := range tc.NextProtos {
-				if p != "h2" {
-					protos = append(protos, p)
-				}
-			}
-			tc.NextProtos = protos
-			tr.TLSClientConfig = tc
+			tc = cfg.TLSClientConfig.Clone()
 		}
-		rt = tr
+		// Lọc "h2" vô điều kiện; ALPN chỉ chào http/1.1.
+		tc.NextProtos = []string{"http/1.1"}
+		rt = &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSClientConfig:       tc,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+			IdleConnTimeout:       90 * time.Second,
+			MaxIdleConns:          cfg.MaxConns,
+			MaxIdleConnsPerHost:   cfg.MaxConns,
+			MaxConnsPerHost:       cfg.MaxConns,
+			// Tắt HTTP/2 (xem doc gói): ForceAttemptHTTP2=false và TLSNextProto rỗng nhưng khác nil.
+			ForceAttemptHTTP2: false,
+			TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
+		}
 	}
 	return &Client{
 		hc: &http.Client{
@@ -243,6 +248,7 @@ func (c *Client) readRequestBody(ctx context.Context, body io.ReadCloser) ([]byt
 	case r := <-ch:
 		return r.b, r.err
 	case <-ctx.Done():
+		_ = body.Close() // gỡ reader đang treo để goroutine không rò
 		return nil, fmt.Errorf("providerhttp: đọc thân request: %w", ctx.Err())
 	}
 }

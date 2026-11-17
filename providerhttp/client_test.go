@@ -440,8 +440,44 @@ func tlsServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
 	return srv
 }
 
-// Client mặc định không đàm phán h2 dù server cho phép, kể cả khi người dùng khai NextProtos có h2.
-func TestDefaultClientDoesNotNegotiateHTTP2(t *testing.T) {
+// Client mặc định (TLSClientConfig nil) không chào h2 trong ALPN; server ghi lại ClientHello.
+func TestDefaultClientDoesNotOfferH2(t *testing.T) {
+	for name, tc := range map[string]*tls.Config{
+		"nil":            nil,
+		"NextProtos nil": {},
+		"NextProtos h2":  {NextProtos: []string{"h2", "http/1.1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var offered []string
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			srv.EnableHTTP2 = true
+			srv.TLS = &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+				mu.Lock()
+				offered = append(offered, h.SupportedProtos...)
+				mu.Unlock()
+				return nil, nil
+			}}
+			srv.StartTLS()
+			defer srv.Close()
+			// Không tin CA của server: handshake hỏng, nhưng ClientHello đã tới server.
+			_, _ = newClient(t, providerhttp.Config{TLSClientConfig: tc}).Do(get(t, srv.URL))
+			mu.Lock()
+			defer mu.Unlock()
+			if len(offered) == 0 {
+				t.Fatal("server không nhận ClientHello")
+			}
+			for _, p := range offered {
+				if p == "h2" {
+					t.Fatalf("client chào h2: %v", offered)
+				}
+			}
+		})
+	}
+}
+
+// Đầu-cuối: client mặc định gọi thành công tới server TLS bật h2, và server thấy HTTP/1.1.
+func TestDefaultClientEndToEndAgainstH2Server(t *testing.T) {
 	var proto atomic.Int32
 	srv := tlsServer(t, func(_ http.ResponseWriter, r *http.Request) { proto.Store(int32(r.ProtoMajor)) })
 	pool := x509.NewCertPool()
@@ -449,12 +485,46 @@ func TestDefaultClientDoesNotNegotiateHTTP2(t *testing.T) {
 	for _, protos := range [][]string{nil, {"h2", "http/1.1"}} {
 		proto.Store(0)
 		c := newClient(t, providerhttp.Config{TLSClientConfig: &tls.Config{RootCAs: pool, NextProtos: protos}})
-		if _, err := c.Do(get(t, srv.URL)); err != nil {
-			t.Fatal(err)
+		resp, err := c.Do(get(t, srv.URL))
+		if err != nil || resp.Status != 200 {
+			t.Fatalf("NextProtos=%v: resp=%v err=%v", protos, resp, err)
 		}
 		if proto.Load() != 1 {
 			t.Fatalf("NextProtos=%v: server thấy HTTP/%d", protos, proto.Load())
 		}
+	}
+}
+
+type hangBody struct {
+	closed chan struct{}
+	done   chan struct{}
+}
+
+func (b *hangBody) Read([]byte) (int, error) {
+	defer close(b.done)
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+func (b *hangBody) Close() error {
+	select {
+	case <-b.closed:
+	default:
+		close(b.closed)
+	}
+	return nil
+}
+
+// Hết hạn khi đang đọc thân: body bị đóng để reader treo thoát, không rò goroutine.
+func TestDo_RequestBodyTimeoutClosesBody(t *testing.T) {
+	b := &hangBody{closed: make(chan struct{}), done: make(chan struct{})}
+	req := get(t, "http://127.0.0.1:1/")
+	req.Method, req.Body = http.MethodPost, b
+	_, err := newClient(t, providerhttp.Config{Timeout: 30 * time.Millisecond}).Do(req)
+	_ = requireKind(t, err, connector.ErrProviderUnavailable)
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reader vẫn treo sau khi hết hạn")
 	}
 }
 
