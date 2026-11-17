@@ -1,0 +1,127 @@
+package conformance
+
+import (
+	"strings"
+	"testing"
+
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
+)
+
+// rule là một luật; op khác rỗng nghĩa là chỉ áp khi connector khai thao tác đó.
+type rule struct {
+	id            string
+	op            connector.Operation
+	createPartner bool // cần Create gọi đối tác (Harness.CreateCallsPartner)
+	check         func(e *env)
+}
+
+// rules theo thứ tự cố định; mã luật là hợp đồng với developer, xem README.md.
+var rules = []rule{
+	{id: "ID-1", check: checkID1},
+	{id: "ID-2", check: checkID2},
+	{id: "ID-3", check: checkID3},
+	{id: "PAY-1", check: checkPAY1},
+	{id: "PAY-2", check: checkPAY2},
+	{id: "PAY-3", createPartner: true, check: checkPAY3},
+	{id: "PAY-4", createPartner: true, check: checkPAY4},
+	{id: "PAY-5", createPartner: true, check: checkPAY5},
+	{id: "PAY-6", createPartner: true, check: checkPAY6},
+	{id: "PAY-7", check: checkPAY7},
+	{id: "QRY-1", op: connector.OpQueryPayment, check: checkQRY1},
+	{id: "QRY-2", op: connector.OpQueryPayment, check: checkQRY2},
+	{id: "QRY-3", op: connector.OpQueryPayment, check: checkQRY3},
+	{id: "CXL-1", op: connector.OpCancel, check: checkCXL1},
+	{id: "WHK-1", op: connector.OpWebhook, check: checkWHK1},
+	{id: "WHK-2", op: connector.OpWebhook, check: checkWHK2},
+	{id: "WHK-3", op: connector.OpWebhook, check: checkWHK3},
+	{id: "WHK-4", op: connector.OpWebhook, check: checkWHK4},
+	{id: "WHK-5", op: connector.OpWebhook, check: checkWHK5},
+	{id: "WHK-6", op: connector.OpWebhook, check: checkWHK6},
+	{id: "RFD-1", op: connector.OpRefund, check: checkRFD1},
+	{id: "RFD-2", op: connector.OpQueryRefund, check: checkRFD2},
+	{id: "CTX-1", check: checkCTX1},
+}
+
+const grpcSuffix = "/grpc"
+
+// Check chạy mọi luật, mỗi luật hai lượt (thẳng và qua gRPC), mỗi lượt một cặp connector/đối tác mới.
+// Không bao giờ đánh trượt tb: mọi vi phạm nằm trong Report; tb chỉ để đăng ký dọn dẹp.
+func Check(tb testing.TB, h Harness) Report {
+	var rep Report
+	for _, r := range rules {
+		for _, viaGRPC := range []bool{false, true} {
+			code := r.id
+			if viaGRPC {
+				code += grpcSuffix
+			}
+			findings, skip := runOne(tb, h, r, code, viaGRPC)
+			for _, d := range findings {
+				rep.Findings = append(rep.Findings, Finding{Rule: code, Detail: d})
+			}
+			if skip != "" && len(findings) == 0 {
+				rep.Skipped = append(rep.Skipped, code+": "+skip)
+			}
+		}
+	}
+	return rep
+}
+
+// runOne chạy một lượt của một luật; h.New và grpctest.New chạy trên goroutine của test vì có thể gọi tb.Fatal.
+func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]string, string) {
+	if r.createPartner && !h.CreateCallsPartner {
+		return nil, "Create không gọi đối tác (Harness.CreateCallsPartner sai)"
+	}
+	c, p := h.New(tb)
+	e := &env{h: h, c: c, orig: c, p: p, rule: code, ops: declared(c)}
+	if r.op != "" && !e.ops[r.op] {
+		return nil, "connector không khai thao tác " + string(r.op)
+	}
+	var plog *panicLog
+	if viaGRPC {
+		client, pl, err := loopback(tb, c)
+		plog = pl
+		if err != nil {
+			if r.id != "ID-1" {
+				return nil, "không dựng được kênh gRPC vì Describe lỗi (xem ID-1/grpc): " + err.Error()
+			}
+			e.fail("Describe qua gRPC lỗi: %v; cần mô tả được (tên không đổi, đủ webhook_acks hợp lệ, không panic); core không nạp được connector, mọi thanh toán qua đối tác này đều không chạy", err)
+		} else {
+			e.c = client
+		}
+	}
+	if len(e.findings) == 0 {
+		if err := guard(ruleLimit, func() { r.check(e) }); err != nil {
+			e.fail("luật không chạy xong: %v; connector phải trả về trong hạn và không panic", err)
+		}
+	}
+	if plog != nil {
+		for _, pm := range plog.drain() {
+			e.fail("connector panic khi chạy qua gRPC (%s); cần trả lỗi thay vì panic; core nhận lời gọi không rõ kết quả và giao dịch của khách bị kẹt", pm)
+		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.findings...), e.skip
+}
+
+// Run chạy Check và báo mỗi lượt của mỗi luật thành một subtest: vi phạm là t.Errorf, luật bị bỏ là t.Skip.
+func Run(t *testing.T, h Harness) {
+	t.Helper()
+	rep := Check(t, h)
+	for _, r := range rules {
+		for _, code := range []string{r.id, r.id + grpcSuffix} {
+			t.Run(code, func(t *testing.T) {
+				for _, f := range rep.Findings {
+					if f.Rule == code {
+						t.Errorf("%s: %s", f.Rule, f.Detail)
+					}
+				}
+				for _, s := range rep.Skipped {
+					if reason, ok := strings.CutPrefix(s, code+": "); ok {
+						t.Skip(reason)
+					}
+				}
+			})
+		}
+	}
+}

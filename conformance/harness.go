@@ -1,0 +1,272 @@
+// Package conformance là bộ luật mọi connector phải qua trước khi được nối vào core. Mỗi luật chạy hai
+// lần: gọi thẳng connector, và gọi qua gRPC (mã luật có hậu tố /grpc) như core thật sẽ gọi.
+package conformance
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc/grpctest"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+)
+
+// Mode là cách đối tác giả cư xử ở lần gọi kế tiếp.
+type Mode int
+
+const (
+	ModeNormal  Mode = iota // trả lời bình thường
+	ModeDown                // từ chối kết nối: chắc chắn chưa nhận lời gọi
+	ModeHang                // nhận lời gọi rồi im, không bao giờ trả lời
+	ModeReject              // trả lời rõ ràng là từ chối
+	ModeGarbage             // trả 200 với thân không hiểu được
+)
+
+// Partner là đối tác giả mà connector trong Harness.New nói chuyện cùng.
+type Partner interface {
+	SetMode(m Mode)
+	// SignedWebhook dựng một webhook hợp lệ đã ký báo trạng thái cho giao dịch.
+	SignedWebhook(transactionCode, providerRef string, status connector.Status, paid paykit.Money) connector.RawWebhook
+	// SetPaymentStatus quyết định câu trả lời cho lần truy vấn kế tiếp.
+	SetPaymentStatus(transactionCode string, status connector.Status, paid paykit.Money)
+}
+
+// Harness mô tả connector cần kiểm.
+type Harness struct {
+	New    func(tb testing.TB) (connector.Connector, Partner) // mỗi kiểm tra một cặp mới
+	Method paykit.Method
+	Amount paykit.Money
+	// CreateCallsPartner sai nghĩa là tạo giao dịch chỉ ký tại chỗ: bỏ các kiểm tra Down/Hang/Reject/Garbage của Create.
+	CreateCallsPartner bool
+}
+
+// Finding là một vi phạm: Rule là mã luật, Detail nêu điều thấy được, điều mong đợi và hậu quả.
+type Finding struct{ Rule, Detail string }
+
+// Report là kết quả Check. Skipped có dạng "MÃ: lý do".
+type Report struct {
+	Findings []Finding
+	Skipped  []string
+}
+
+const (
+	callLimit   = 5 * time.Second        // lời gọi bình thường tới đối tác giả trong tiến trình
+	hangCtx     = 300 * time.Millisecond // hạn của ctx khi đối tác treo
+	hangSlack   = 2 * time.Second        // thời gian cho phép vượt hạn ctx
+	cancelLimit = 2 * time.Second        // ctx đã huỷ thì phải trả về trong khoảng này
+	ruleLimit   = 30 * time.Second       // lưới an toàn cho cả một luật
+)
+
+// guardError: fn panic (panicked đúng) hoặc không xong trong hạn.
+type guardError struct {
+	panicked bool
+	value    any
+	limit    time.Duration
+}
+
+func (g *guardError) Error() string {
+	if g.panicked {
+		return fmt.Sprintf("panic: %v", g.value)
+	}
+	return fmt.Sprintf("không trả về sau %v", g.limit)
+}
+
+// guard chạy fn trong goroutine riêng có bắt panic; lỗi khi fn panic hoặc không xong trong limit.
+// Hết hạn thì bỏ mặc goroutine (connector treo), không chờ.
+func guard(limit time.Duration, fn func()) *guardError {
+	done := make(chan *guardError, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- &guardError{panicked: true, value: r}
+				return
+			}
+			done <- nil
+		}()
+		fn()
+	}()
+	t := time.NewTimer(limit)
+	defer t.Stop()
+	select {
+	case g := <-done:
+		return g
+	case <-t.C:
+		return &guardError{limit: limit}
+	}
+}
+
+// env là bối cảnh của một lượt chạy một luật (thẳng hoặc qua gRPC).
+type env struct {
+	h    Harness
+	c    connector.Connector // connector đang kiểm: chính nó hoặc proxy gRPC
+	orig connector.Connector // connector của developer
+	p    Partner
+	ops  map[connector.Operation]bool // thao tác connector của developer khai (As… đúng)
+	rule string
+	seq  int
+
+	mu       sync.Mutex
+	findings []string
+	skip     string
+}
+
+func (e *env) fail(format string, args ...any) {
+	e.mu.Lock()
+	e.findings = append(e.findings, fmt.Sprintf(format, args...))
+	e.mu.Unlock()
+}
+
+func (e *env) skipf(format string, args ...any) {
+	e.mu.Lock()
+	e.skip = fmt.Sprintf(format, args...)
+	e.mu.Unlock()
+}
+
+// call chạy một lời gọi connector; panic hay quá limit thành finding và trả false.
+func (e *env) call(what string, limit time.Duration, fn func()) bool {
+	g := guard(limit, fn)
+	switch {
+	case g == nil:
+		return true
+	case g.panicked:
+		e.fail("%s panic: %v; cần trả lỗi thay vì panic; core coi lời gọi là không rõ kết quả và giao dịch của khách bị kẹt", what, g.value)
+	default:
+		e.fail("%s không trả về sau %v; cần tôn trọng hạn của ctx; lời gọi treo giữ chân core và giao dịch của khách bị kẹt", what, g.limit)
+	}
+	return false
+}
+
+// tx sinh mã giao dịch mới, chỉ chữ hoa và số để hợp với đa số đối tác.
+func (e *env) tx() string {
+	e.seq++
+	code := make([]byte, 0, len(e.rule))
+	for i := 0; i < len(e.rule); i++ {
+		if b := e.rule[i]; b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' {
+			code = append(code, b)
+		}
+	}
+	return fmt.Sprintf("CF%s%02d", code, e.seq)
+}
+
+func normalCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), callLimit)
+}
+
+// panicLog ghi panic của connector phía server gRPC, để lượt /grpc cũng báo được chúng.
+type panicLog struct {
+	mu     sync.Mutex
+	panics []string
+}
+
+func (l *panicLog) intercept(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (resp any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			l.mu.Lock()
+			l.panics = append(l.panics, fmt.Sprintf("%s: %v", info.FullMethod, r))
+			l.mu.Unlock()
+			err = status.Error(codes.Internal, "connector panic")
+		}
+	}()
+	return h(ctx, req)
+}
+
+func (l *panicLog) drain() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := l.panics
+	l.panics = nil
+	return out
+}
+
+// loopback phục vụ c qua gRPC trên bufconn và trả proxy phía core đã Describe. Không dùng
+// grpctest.Loopback vì nó không bắt panic phía server (panic sẽ làm sập cả tiến trình test) và gọi
+// tb.Fatal khi Describe hỏng; ở đây Describe hỏng là lỗi trả về để thành finding của ID-1/grpc.
+func loopback(tb testing.TB, c connector.Connector) (*connectorrpc.Client, *panicLog, error) {
+	pl := &panicLog{}
+	gh := grpctest.New(tb, connectorrpc.NewServer(c), grpc.ChainUnaryInterceptor(pl.intercept))
+	var name string
+	if err := guard(callLimit, func() { name = c.Name() }); err != nil {
+		return nil, pl, fmt.Errorf("Name(): %w", err)
+	}
+	client := connectorrpc.NewClient(name, gh.Conn, connectorrpc.ClientOptions{CallTimeout: callLimit})
+	var derr error
+	if err := guard(callLimit+time.Second, func() {
+		ctx, cancel := normalCtx()
+		defer cancel()
+		_, derr = client.Describe(ctx)
+	}); err != nil {
+		return nil, pl, fmt.Errorf("Describe: %w", err)
+	}
+	if derr != nil {
+		return nil, pl, derr
+	}
+	return client, pl, nil
+}
+
+// declared trả các thao tác connector khai (connector.As… đúng); Supports panic thì coi là không khai.
+func declared(c connector.Connector) map[connector.Operation]bool {
+	ops := map[connector.Operation]bool{}
+	for _, op := range allOps {
+		var ok bool
+		if guard(callLimit, func() { ok = asOp(c, op) }) == nil && ok {
+			ops[op] = true
+		}
+	}
+	return ops
+}
+
+var allOps = []connector.Operation{
+	connector.OpQueryPayment, connector.OpWebhook, connector.OpRedirect, connector.OpCharge,
+	connector.OpCancel, connector.OpRefund, connector.OpQueryRefund,
+}
+
+func asOp(c connector.Connector, op connector.Operation) bool {
+	var ok bool
+	switch op {
+	case connector.OpQueryPayment:
+		_, ok = connector.AsPaymentQuerier(c)
+	case connector.OpWebhook:
+		_, ok = connector.AsWebhookReceiver(c)
+	case connector.OpRedirect:
+		_, ok = connector.AsRedirecter(c)
+	case connector.OpCharge:
+		_, ok = connector.AsCharger(c)
+	case connector.OpCancel:
+		_, ok = connector.AsCanceler(c)
+	case connector.OpRefund:
+		_, ok = connector.AsRefunder(c)
+	case connector.OpQueryRefund:
+		_, ok = connector.AsRefundQuerier(c)
+	}
+	return ok
+}
+
+// implements: c có cài interface của op hay không, không hỏi Supports.
+func implements(c connector.Connector, op connector.Operation) bool {
+	var ok bool
+	switch op {
+	case connector.OpQueryPayment:
+		_, ok = c.(connector.PaymentQuerier)
+	case connector.OpWebhook:
+		_, ok = c.(connector.WebhookReceiver)
+	case connector.OpRedirect:
+		_, ok = c.(connector.Redirecter)
+	case connector.OpCharge:
+		_, ok = c.(connector.Charger)
+	case connector.OpCancel:
+		_, ok = c.(connector.Canceler)
+	case connector.OpRefund:
+		_, ok = c.(connector.Refunder)
+	case connector.OpQueryRefund:
+		_, ok = c.(connector.RefundQuerier)
+	}
+	return ok
+}
