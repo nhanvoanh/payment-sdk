@@ -70,12 +70,13 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 | Không kết nối được tới acme (chưa gửi byte nào) | `ErrProviderUnavailable` | `providerhttp` phân loại; connector trả nguyên, chỉ thêm ngữ cảnh bằng `%w`. |
 | Hết hạn hoặc đứt sau khi đã gửi | `ErrUnknownOutcome` | `providerhttp` phân loại. Acme có thể đã trừ tiền. |
 | 401 lần đầu | làm mới token, gửi lại **một** lần | 401 là từ chối trước khi xử lý nên gửi lại không thể trừ tiền hai lần. Gửi cùng `Idempotency-Key`. |
-| 401 lần hai | `ErrProviderUnavailable` | Vẫn là từ chối trước khi xử lý theo giao thức acme. Đối tác không bảo đảm thế thì dùng `ErrUnknownOutcome`. |
-| 4xx có mã lỗi của acme | `*connector.RejectedError{Code, Message}` | Acme nói rõ từ chối. |
+| 401 lần hai | `ErrProviderUnavailable` | Chỉ đúng khi tài liệu của đối tác bảo đảm 401 là từ chối trước khi xử lý; không được giả định. Không có bảo đảm đó thì dùng `ErrUnknownOutcome`. |
+| 4xx có mã trong `rejectCodes` (`declined`, `invalid_request`, `already_paid`, `not_found`) | `*connector.RejectedError{Code, Message}` | Tài liệu acme nói rõ đó là từ chối cuối cùng. **Mã chưa ánh xạ là chưa rõ**; chỉ thêm mã vào danh sách khi tài liệu của đối tác nói rõ đó là từ chối cuối cùng (nhiều đối tác trả 4xx có mã cho "đang xử lý", 408, 429). |
 | 404 `not_found` khi truy vấn thanh toán hoặc hoàn tiền | `Found=false`, không lỗi | Core truy vấn cả giao dịch chưa tới được acme; lỗi ở đây khiến giao dịch không bao giờ đóng được. |
-| 5xx, 3xx, 4xx không có mã lỗi | `ErrUnknownOutcome` | Acme (hoặc proxy giữa đường) đã trả lời nên có thể đã xử lý. Không bao giờ unavailable. |
+| 5xx, 3xx, 4xx mã chưa ánh xạ hoặc không có mã | `ErrUnknownOutcome` | Acme (hoặc proxy giữa đường) đã trả lời nên có thể đã xử lý. Không bao giờ unavailable. |
 | 2xx với thân không hiểu được, thiếu trường, trạng thái lạ | `ErrUnknownOutcome` | Tiền có thể đã đi; không đoán "thất bại". |
-| Thiếu `ProviderRef` khi huỷ/hoàn (ta phát hiện trước khi gửi) | `ErrProviderUnavailable` | Chắc chắn chưa gửi gì. |
+| Thiếu `ProviderRef` khi huỷ/hoàn (ta phát hiện trước khi gửi) | `ErrProviderUnavailable` | Chắc chắn chưa gửi gì. Acme chỉ huỷ theo `ProviderRef`, không theo `TransactionCode`: giao dịch chưa có `ProviderRef` (Create chưa trả lời) thì chưa huỷ được. |
+| Phản hồi tạo thanh toán có `order_code` khác mã đã gửi | `ErrUnknownOutcome` | Không tin phản hồi về giao dịch khác. |
 | Webhook sai chữ ký | `ErrInvalidSignature` | Kiểm trên byte thô trước khi đọc thân. |
 | Webhook loại không liên quan | `ErrEventNotRelevant` | Đã xác thực nhưng không có gì để áp. |
 | Huỷ thanh toán đã trả | `RejectedError` (409 `already_paid`) | Không bao giờ tự báo `canceled` khi acme không nói vậy. |
@@ -90,6 +91,12 @@ từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-3` (t
 
 ## Test
 
-`go test -race ./...` chạy dưới một phút. Đối tác giả đóng kết nối sau mỗi phản hồi để `ModeDown` luôn là
-"từ chối kết nối" tất định; `ModeHang`/`ModeReject`/`ModeGarbage` chỉ áp cho lời gọi nghiệp vụ, không áp cho
+`go test -race ./...` chạy dưới một phút. Đối tác giả đóng kết nối sau mỗi phản hồi CHỈ để `ModeDown` luôn là
+"từ chối kết nối" tất định. Với đối tác thật có giữ kết nối, đối tác sập sau khi đã có lưu lượng có thể cho
+`ErrUnknownOutcome` thay vì `ErrProviderUnavailable` (hướng an toàn, chấp nhận được); `ModeHang`/`ModeReject`/`ModeGarbage` chỉ áp cho lời gọi nghiệp vụ, không áp cho
 `/oauth/token` (chúng mô tả lỗi của lời gọi tiền).
+
+## Image
+
+`.dockerignore` loại `.git`, `.env*`, `*.pem`, `*.key` khỏi bối cảnh dựng: giữ nguyên và thêm các file bí mật khác của bạn. Không đưa
+chứng chỉ hay secret vào image; chúng đến qua biến môi trường và volume lúc chạy.

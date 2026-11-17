@@ -22,6 +22,7 @@ func TestForbiddenNames(t *testing.T) {
 	if len(words) == 0 {
 		t.Skip("SDK_FORBIDDEN_NAMES rỗng")
 	}
+	pathHits := 0
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -45,7 +46,13 @@ func TestForbiddenNames(t *testing.T) {
 		low := bytes.ToLower(b)
 		lowPath := []byte(strings.ToLower(path))
 		for _, w := range words {
-			if bytes.Contains(low, w) || bytes.Contains(lowPath, w) {
+			if bytes.Contains(lowPath, w) {
+				// Từ khoá nằm ngay trong đường dẫn: in đường dẫn là lộ từ khoá ra log CI.
+				pathHits++
+				t.Errorf("một đường dẫn chứa từ khoá bị cấm (đường dẫn không được in, mục #%d)", pathHits)
+				break
+			}
+			if bytes.Contains(low, w) {
 				t.Errorf("%s chứa một từ khoá bị cấm", path)
 				break
 			}

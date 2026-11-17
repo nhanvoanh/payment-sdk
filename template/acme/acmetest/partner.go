@@ -28,7 +28,10 @@ const (
 	merchantID = "M-TEST"
 )
 
-var _ conformance.Partner = (*Partner)(nil)
+var (
+	_ conformance.Partner  = (*Partner)(nil)
+	_ conformance.Tamperer = (*Partner)(nil)
+)
 
 type payment struct {
 	ID, OrderCode, Status string
@@ -151,6 +154,19 @@ func (p *Partner) SetPaymentStatus(tx string, st connector.Status, paid paykit.M
 // SignedWebhook dựng webhook thanh toán hợp lệ đã ký như acme gửi thật (conformance.Partner).
 func (p *Partner) SignedWebhook(tx, ref string, st connector.Status, paid paykit.Money) connector.RawWebhook {
 	return p.SignedWebhookOfType("payment.updated", tx, ref, st, paid)
+}
+
+// TamperedWebhook cài conformance.Tamperer: đổi nội dung được ký (trạng thái và số tiền) nhưng giữ nguyên
+// chữ ký, nên WHK-4 chạy ở mức chặt (đòi đúng ErrInvalidSignature).
+func (p *Partner) TamperedWebhook(raw connector.RawWebhook) connector.RawWebhook {
+	var m map[string]any
+	if json.Unmarshal(raw.Body, &m) != nil {
+		p.tb.Errorf("acmetest: thân webhook không phải JSON")
+		return raw
+	}
+	m["status"], m["amount_paid"] = "paid", int64(1)
+	raw.Body, _ = json.Marshal(m)
+	return raw
 }
 
 // SignedWebhookOfType như SignedWebhook nhưng chọn loại sự kiện, để test sự kiện không liên quan.

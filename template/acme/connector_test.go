@@ -3,7 +3,12 @@ package acme_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -52,14 +57,18 @@ func TestAcme_Conformance(t *testing.T) {
 		Amount:             amount,
 		CreateCallsPartner: true,
 	}
-	// Check thay vì Run để khẳng định thêm: không luật nào bị bỏ. Acme không cài Charger và Redirecter
-	// và conformance không có luật riêng cho hai thao tác đó, nên mọi luật đều chạy.
+	// Check thay vì Run để khẳng định thêm: chỉ luật của thao tác acme không khai bị bỏ.
+	// Sao chép mẫu: bỏ hay thêm interface thì cập nhật notDeclared.
 	rep := conformance.Check(t, h)
 	for _, f := range rep.Findings {
 		t.Errorf("%s: %s", f.Rule, f.Detail)
 	}
+	notDeclared := []string{"connector không khai thao tác charge", "connector không khai thao tác redirect"}
 	for _, s := range rep.Skipped {
-		t.Errorf("luật bị bỏ: %s", s)
+		_, reason, _ := strings.Cut(s, ": ")
+		if !slices.Contains(notDeclared, reason) {
+			t.Errorf("luật bị bỏ không vì thao tác chưa khai: %s", s)
+		}
 	}
 }
 
@@ -198,6 +207,15 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Fatalf("cfg = %+v, cần %+v", cfg, want)
 	}
 
+	blank := map[string]string{"ACME_BASE_URL": "https://a.example", "ACME_MERCHANT_ID": "M", "ACME_SECRET_KEY": " \n"}
+	if _, err := acme.ConfigFromEnv(env(blank)); err == nil || !strings.Contains(err.Error(), "ACME_SECRET_KEY") {
+		t.Errorf("secret chỉ có khoảng trắng: err = %v, cần nêu ACME_SECRET_KEY", err)
+	}
+	padded := map[string]string{"ACME_BASE_URL": " https://a.example\n", "ACME_MERCHANT_ID": "M", "ACME_SECRET_KEY": "s3cret\n"}
+	if cfg, err := acme.ConfigFromEnv(env(padded)); err != nil || cfg.SecretKey != "s3cret" || cfg.BaseURL != "https://a.example" {
+		t.Errorf("khoảng trắng thừa phải bị cắt: cfg=%+v err=%v", cfg, err)
+	}
+
 	for _, name := range []string{"ACME_BASE_URL", "ACME_MERCHANT_ID", "ACME_SECRET_KEY"} {
 		m := map[string]string{}
 		for k, v := range full {
@@ -256,7 +274,7 @@ func TestAcme_OverMTLS(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	go func() {
-		served <- connectorsdk.ServeListener(ctx, c, connectorsdk.Options{TLS: srvTLS, AllowedClients: []string{"core.test"}}, lis)
+		served <- connectorsdk.ServeListener(ctx, c, connectorsdk.Options{TLS: srvTLS, AllowedClients: []string{"core.test"}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, lis)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -294,5 +312,106 @@ func TestAcme_OverMTLS(t *testing.T) {
 	}
 	if ev.TransactionCode != "TMTLS" || ev.Status != connector.StatusSucceeded || ev.EventID == "" {
 		t.Fatalf("sự kiện lạ: %+v", ev)
+	}
+}
+
+// stub dựng một acme tối giản tự viết để test những phản hồi đối tác giả chuẩn không tạo ra.
+// token và pay là handler của /oauth/token và /v1/payments; trả số request nghiệp vụ đã tới.
+func stub(t *testing.T, token, pay http.HandlerFunc) (*acme.Connector, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	hits := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/token", token)
+	mux.HandleFunc("/v1/payments", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		pay(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c, err := acme.New(acme.Config{BaseURL: srv.URL, MerchantID: "M", SecretKey: "s", Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, func() int { mu.Lock(); defer mu.Unlock(); return hits }
+}
+
+func goodToken(w http.ResponseWriter, _ *http.Request) {
+	_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":300}`))
+}
+
+func TestAcme_TokenFailuresAreUnavailableAndSendNothing(t *testing.T) {
+	cases := map[string]struct {
+		token http.HandlerFunc
+		ctx   time.Duration
+	}{
+		"timeout": {func(_ http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body) // đọc hết thân để server phát hiện client bỏ đi
+			<-r.Context().Done()
+		}, 200 * time.Millisecond},
+		"thân rác": {func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("<<rác>>")) }, 5 * time.Second},
+		"5xx":      {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }, 5 * time.Second},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, hits := stub(t, tc.token, func(http.ResponseWriter, *http.Request) {})
+			ctx, cancel := context.WithTimeout(context.Background(), tc.ctx)
+			defer cancel()
+			_, err := c.CreatePayment(ctx, createReq("TTOK"))
+			if !errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) {
+				t.Fatalf("err = %v, cần ErrProviderUnavailable và không khớp ErrUnknownOutcome", err)
+			}
+			if hits() != 0 {
+				t.Fatal("request nghiệp vụ không được gửi")
+			}
+		})
+	}
+}
+
+func TestAcme_UnmappedClientErrorCodeIsUnknown(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		"409 đang xử lý":      {409, `{"error":{"code":"processing","message":"đang xử lý"}}`},
+		"429 giới hạn tốc độ": {429, `{"error":{"code":"rate_limited","message":"chậm lại"}}`},
+		"4xx không có mã":     {400, `<html>bad gateway</html>`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := stub(t, goodToken, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			_, err := c.CreatePayment(context.Background(), createReq("TUNMAPPED"))
+			if !errors.Is(err, connector.ErrUnknownOutcome) || errors.Is(err, connector.ErrProviderRejected) {
+				t.Fatalf("err = %v, cần ErrUnknownOutcome và không phải Rejected", err)
+			}
+		})
+	}
+}
+
+func TestAcme_MismatchedOrderCodeIsUnknown(t *testing.T) {
+	c, _ := stub(t, goodToken, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"payment_id":"p1","order_code":"KHAC","status":"pending","redirect_url":"https://pay.acme.example/c/p1"}`))
+	})
+	_, err := c.CreatePayment(context.Background(), createReq("TMISMATCH"))
+	if !errors.Is(err, connector.ErrUnknownOutcome) {
+		t.Fatalf("err = %v, cần ErrUnknownOutcome", err)
+	}
+}
+
+func TestAcme_AmbiguousSignatureHeaderIsInvalid(t *testing.T) {
+	c, p := newPair(t)
+	raw := p.SignedWebhook("TDUP", "ref", connector.StatusSucceeded, amount)
+	good := raw.Headers["X-Acme-Signature"][0]
+	raw.Headers = map[string][]string{"X-Acme-Signature": {good}, "x-acme-signature": {good}}
+	if _, err := c.ParseWebhook(context.Background(), raw); !errors.Is(err, connector.ErrInvalidSignature) {
+		t.Fatalf("err = %v, cần ErrInvalidSignature khi có hai header chữ ký", err)
+	}
+	raw.Headers = map[string][]string{"x-acme-signature": {good}} // một header, khác hoa/thường: hợp lệ
+	if _, err := c.ParseWebhook(context.Background(), raw); err != nil {
+		t.Fatalf("header chữ ký viết thường phải hợp lệ: %v", err)
 	}
 }

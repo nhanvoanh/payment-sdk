@@ -80,6 +80,10 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 		return connector.CreatePaymentResult{}, err
 	}
 	st, na, expires, err := w.forCreate()
+	if err == nil && w.OrderCode != req.TransactionCode {
+		// Phản hồi nói về giao dịch khác: tin nó là gán nhầm tiền của khách khác.
+		err = fmt.Errorf("order_code %q không khớp mã đã gửi", w.OrderCode)
+	}
 	if err != nil {
 		return connector.CreatePaymentResult{}, badBody(err)
 	}
@@ -202,13 +206,18 @@ func (c *Connector) ParseWebhook(_ context.Context, raw connector.RawWebhook) (c
 
 // validSignature: X-Acme-Signature là HMAC-SHA256 hex của toàn bộ thân. Tên header không phân biệt hoa thường.
 func (c *Connector) validSignature(raw connector.RawWebhook) bool {
-	var sig string
+	// Đúng một giá trị trên mọi biến thể hoa/thường của tên header; nhiều hơn là mơ hồ, và chọn một
+	// giá trị theo thứ tự duyệt map sẽ cho kết quả không tất định.
+	var sigs []string
 	for k, v := range raw.Headers {
-		if strings.EqualFold(k, "X-Acme-Signature") && len(v) > 0 {
-			sig = v[0]
+		if strings.EqualFold(k, "X-Acme-Signature") {
+			sigs = append(sigs, v...)
 		}
 	}
-	got, err := hex.DecodeString(sig)
+	if len(sigs) != 1 {
+		return false
+	}
+	got, err := hex.DecodeString(sigs[0])
 	if err != nil || len(got) == 0 {
 		return false
 	}
@@ -294,6 +303,8 @@ func (c *Connector) send(ctx context.Context, method, path string, q url.Values,
 		}
 		c.tokens.Invalidate(tok)
 		if attempt == 1 {
+			// Chỉ đúng khi TÀI LIỆU của đối tác bảo đảm 401 là từ chối trước khi xử lý; không được
+			// giả định. Không có bảo đảm đó thì trả ErrUnknownOutcome.
 			return nil, notSent("acme từ chối thông tin xác thực hai lần (401)")
 		}
 	}
@@ -328,10 +339,15 @@ func (c *Connector) url(path string, q url.Values) string {
 	return u.String()
 }
 
+// rejectCodes là các mã lỗi 4xx mà tài liệu acme nói rõ là từ chối CUỐI CÙNG (chưa và sẽ không xử lý).
+// Chỉ thêm mã vào đây khi tài liệu của đối tác nói vậy: nhiều đối tác trả 4xx có mã khi kết quả chưa ngã
+// ngũ (409 "đang xử lý", 408, 429), và RejectedError làm core chốt thất bại trong khi tiền có thể đã đi.
+var rejectCodes = map[string]bool{"declined": true, "invalid_request": true, "already_paid": true, "not_found": true}
+
 // reply đổi phản hồi đã đọc trọn thành nil (và điền out) hoặc lỗi đúng luật tiền:
 //   - 2xx với thân hợp lệ: thành công.
-//   - 4xx có mã lỗi của acme: acme nói rõ từ chối, RejectedError (mã và lời nhắn của acme đi tiếp).
-//   - mọi thứ khác (5xx, 3xx, 4xx không có mã như lỗi của proxy giữa đường, 2xx với thân rác):
+//   - 4xx có mã trong rejectCodes: acme nói rõ từ chối, RejectedError (mã và lời nhắn đi tiếp).
+//   - mọi thứ khác (5xx, 3xx, 4xx mã chưa ánh xạ hoặc không có mã, 2xx với thân rác):
 //     ErrUnknownOutcome. Không bao giờ unavailable: acme đã trả lời nên có thể đã xử lý, ta chỉ không
 //     hiểu được. Chốt "thất bại" ở đây là để khách trả tiền hai lần.
 func reply(resp *providerhttp.Response, out any) error {
@@ -342,11 +358,11 @@ func reply(resp *providerhttp.Response, out any) error {
 		}
 		return nil
 	case resp.Status >= 400 && resp.Status < 500:
-		if code, msg, ok := errorCode(resp.Body); ok {
+		if code, msg, ok := errorCode(resp.Body); ok && rejectCodes[code] {
 			return &connector.RejectedError{Code: code, Message: msg}
 		}
 	}
-	return fmt.Errorf("%w: acme trả HTTP %d không hiểu được", connector.ErrUnknownOutcome, resp.Status)
+	return fmt.Errorf("%w: acme trả HTTP %d không hiểu được hoặc chưa rõ", connector.ErrUnknownOutcome, resp.Status)
 }
 
 func isNotFound(resp *providerhttp.Response) bool {

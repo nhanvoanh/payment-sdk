@@ -117,7 +117,7 @@ func (p paymentJSON) status() (connector.Status, error) {
 	return "", fmt.Errorf("trạng thái thanh toán lạ %q", p.Status)
 }
 
-// refundStatus: từ vựng của lệnh hoàn khác của thanh toán ("refunded" chứ không phải "paid").
+// status của lệnh hoàn: từ vựng khác của thanh toán ("refunded" chứ không phải "paid").
 func (r refundJSON) status() (connector.Status, error) {
 	switch r.Status {
 	case "pending":
@@ -138,10 +138,10 @@ func (p paymentJSON) validate() error {
 	if _, err := p.status(); err != nil {
 		return err
 	}
-	if _, err := parseTime(p.PaymentID, p.PaidAt); err != nil {
+	if _, err := parseTime("paid_at", p.PaidAt); err != nil {
 		return err
 	}
-	_, err := parseTime(p.PaymentID, p.ExpiresAt)
+	_, err := parseTime("expires_at", p.ExpiresAt)
 	return err
 }
 
@@ -164,14 +164,14 @@ func (p paymentJSON) nextAction() (paykit.NextAction, error) {
 	return paykit.NextAction{Kind: paykit.NextActionRedirect, URL: p.RedirectURL}, nil
 }
 
-// parseTime đọc RFC 3339; rỗng là zero. what chỉ để câu lỗi dễ đọc.
-func parseTime(what, s string) (time.Time, error) {
+// parseTime đọc RFC 3339; rỗng là zero. field là tên trường, chỉ để câu lỗi dễ đọc.
+func parseTime(field, s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
 	}
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("thời điểm không hợp lệ ở %s", what)
+		return time.Time{}, fmt.Errorf("thời điểm không hợp lệ ở %s", field)
 	}
 	return t, nil
 }

@@ -23,9 +23,9 @@ type Config struct {
 // ConfigFromEnv đọc ACME_BASE_URL, ACME_MERCHANT_ID, ACME_SECRET_KEY (bắt buộc) và ACME_TIMEOUT
 // (tuỳ chọn, ví dụ "8s"). Thiếu hay sai thì lỗi nêu tên biến, không bao giờ nêu giá trị (có thể là secret).
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
-	cfg := Config{
-		BaseURL: getenv("ACME_BASE_URL"), MerchantID: getenv("ACME_MERCHANT_ID"), SecretKey: getenv("ACME_SECRET_KEY"),
-	}
+	// Cắt khoảng trắng (xuống dòng thừa khi dán secret từ file là lỗi quen thuộc) trước khi kiểm.
+	env := func(k string) string { return strings.TrimSpace(getenv(k)) }
+	cfg := Config{BaseURL: env("ACME_BASE_URL"), MerchantID: env("ACME_MERCHANT_ID"), SecretKey: env("ACME_SECRET_KEY")}
 	var missing []string
 	for _, v := range []struct{ name, val string }{
 		{"ACME_BASE_URL", cfg.BaseURL}, {"ACME_MERCHANT_ID", cfg.MerchantID}, {"ACME_SECRET_KEY", cfg.SecretKey},
@@ -37,7 +37,7 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("acme: thiếu biến môi trường %s", strings.Join(missing, ", "))
 	}
-	if s := getenv("ACME_TIMEOUT"); s != "" {
+	if s := env("ACME_TIMEOUT"); s != "" {
 		d, err := time.ParseDuration(s)
 		if err != nil || d <= 0 {
 			return Config{}, errors.New("acme: ACME_TIMEOUT phải là khoảng thời gian dương, ví dụ 8s")
