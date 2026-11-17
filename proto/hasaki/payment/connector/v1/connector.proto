@@ -1,0 +1,254 @@
+// Contract gRPC giữa core và connector chạy ở tiến trình khác.
+//
+// Bất biến: lỗi nghiệp vụ của connector đi trong thân phản hồi (ConnectorError), không đi bằng mã
+// trạng thái gRPC; mã trạng thái gRPC khác OK luôn là lỗi vận chuyển và bên gọi coi là không rõ kết quả.
+syntax = "proto3";
+
+package hasaki.payment.connector.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb";
+
+service ConnectorService {
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
+  rpc Charge(ChargeRequest) returns (ChargeResponse);
+  rpc QueryPayment(QueryPaymentRequest) returns (QueryPaymentResponse);
+  rpc CancelPayment(CancelPaymentRequest) returns (CancelPaymentResponse);
+  rpc CreateRefund(CreateRefundRequest) returns (CreateRefundResponse);
+  rpc QueryRefund(QueryRefundRequest) returns (QueryRefundResponse);
+  rpc ParseWebhook(ParseWebhookRequest) returns (ParseWebhookResponse);
+  rpc ParseRedirect(ParseRedirectRequest) returns (ParseRedirectResponse);
+}
+
+// Status là trạng thái đối tác báo về; giá trị 0 hoặc giá trị lạ phía nhận là không rõ kết quả.
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PENDING = 1;
+  STATUS_SUCCEEDED = 2;
+  STATUS_FAILED = 3;
+  STATUS_CANCELED = 4;
+  STATUS_ON_HOLD = 5;
+}
+
+enum ErrorKind {
+  ERROR_KIND_UNSPECIFIED = 0;
+  ERROR_KIND_INVALID_SIGNATURE = 1;
+  ERROR_KIND_NOT_SUPPORTED = 2;
+  ERROR_KIND_PROVIDER_UNAVAILABLE = 3;
+  ERROR_KIND_PROVIDER_REJECTED = 4;
+  ERROR_KIND_UNKNOWN_OUTCOME = 5;
+  ERROR_KIND_EVENT_NOT_RELEVANT = 6;
+}
+
+message ConnectorError {
+  ErrorKind kind = 1;
+  string code = 2;
+  string message = 3;
+}
+
+// Money là số tiền nguyên theo đơn vị nhỏ nhất của tiền tệ.
+message Money {
+  int64 amount = 1;
+  string currency = 2;
+}
+
+message Customer {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+  string phone = 4;
+}
+
+message CardMasked {
+  string brand = 1;
+  string last4 = 2;
+  string holder = 3;
+}
+
+message NextAction {
+  string kind = 1;
+  string url = 2;
+  string qr_data = 3;
+  map<string, string> form_fields = 4;
+}
+
+message RawExchange {
+  string request_body = 1;
+  string response_body = 2;
+  int32 http_status = 3;
+  int64 duration_ms = 4;
+}
+
+message StringList {
+  repeated string values = 1;
+}
+
+message RawWebhook {
+  map<string, StringList> headers = 1;
+  map<string, StringList> query = 2;
+  bytes body = 3;
+  string remote_ip = 4;
+}
+
+// WebhookAck là phản hồi HTTP gửi lại đối tác ứng với một outcome.
+message WebhookAck {
+  int32 status = 1;
+  bytes body = 2;
+  string content_type = 3;
+}
+
+message DescribeRequest {}
+
+// webhook_acks có đủ bốn khoá applied|duplicate|ignored|rejected khi connector nhận webhook.
+// Phản hồi ack là hàm thuần của outcome nên chỉ lấy một lần ở đây, không có RPC riêng.
+message DescribeResponse {
+  uint32 protocol_version = 1;
+  string name = 2;
+  repeated string methods = 3;
+  repeated string operations = 4;
+  map<string, WebhookAck> webhook_acks = 5;
+}
+
+message CreatePaymentRequest {
+  string transaction_code = 1;
+  string idempotency_key = 2;
+  Money money = 3;
+  string method = 4;
+  Customer customer = 5;
+  string return_url = 6;
+  string cancel_url = 7;
+  string client_ip = 8;
+  map<string, string> metadata = 9;
+}
+
+message CreatePaymentResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  string provider_ref = 3;
+  Status status = 4;
+  NextAction next_action = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message ChargeRequest {
+  string transaction_code = 1;
+  string idempotency_key = 2;
+  Money money = 3;
+  string method = 4;
+  Customer customer = 5;
+  string return_url = 6;
+  string cancel_url = 7;
+  string client_ip = 8;
+  map<string, string> metadata = 9;
+}
+
+message ChargeResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  string provider_ref = 3;
+  Status status = 4;
+  Money amount_paid = 5;
+  google.protobuf.Timestamp paid_at = 6;
+  NextAction next_action = 7;
+}
+
+message QueryPaymentRequest {
+  string transaction_code = 1;
+  string provider_ref = 2;
+}
+
+// found=false: đối tác không biết giao dịch này; khi đó status không được xét.
+message QueryPaymentResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  bool found = 3;
+  Status status = 4;
+  string provider_ref = 5;
+  Money amount_paid = 6;
+  google.protobuf.Timestamp paid_at = 7;
+  CardMasked card = 8;
+  string provider_code = 9;
+  string provider_message = 10;
+}
+
+message CancelPaymentRequest {
+  string transaction_code = 1;
+  string provider_ref = 2;
+  string idempotency_key = 3;
+}
+
+message CancelPaymentResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  Status status = 3;
+}
+
+message CreateRefundRequest {
+  string refund_code = 1;
+  string idempotency_key = 2;
+  string transaction_code = 3;
+  string provider_ref = 4;
+  Money money = 5;
+  string reason = 6;
+  string customer_id = 7;
+}
+
+message CreateRefundResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  string provider_ref = 3;
+  Status status = 4;
+}
+
+message QueryRefundRequest {
+  string refund_code = 1;
+  string provider_ref = 2;
+  string transaction_code = 3;
+}
+
+message QueryRefundResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  bool found = 3;
+  Status status = 4;
+  string provider_ref = 5;
+  string provider_code = 6;
+  string provider_message = 7;
+}
+
+message ProviderEvent {
+  string event_id = 1;
+  string kind = 2;
+  string transaction_code = 3;
+  string refund_code = 4;
+  string provider_ref = 5;
+  Status status = 6;
+  Money amount_paid = 7;
+  google.protobuf.Timestamp paid_at = 8;
+  CardMasked card = 9;
+  string provider_code = 10;
+  string provider_message = 11;
+  bytes raw = 12;
+}
+
+message ParseWebhookRequest {
+  RawWebhook raw = 1;
+}
+
+message ParseWebhookResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  ProviderEvent event = 3;
+}
+
+message ParseRedirectRequest {
+  RawWebhook raw = 1;
+}
+
+message ParseRedirectResponse {
+  ConnectorError error = 1;
+  RawExchange raw = 2;
+  ProviderEvent event = 3;
+}
