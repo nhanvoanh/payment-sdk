@@ -122,9 +122,11 @@ func TestRegistry_ForMethodAndSetDefault(t *testing.T) {
 	require.NoError(t, r.Register(baseConn{name: "first", methods: []paykit.Method{paykit.MethodQR}}))
 	require.NoError(t, r.Register(baseConn{name: "second", methods: []paykit.Method{paykit.MethodQR, paykit.MethodVisa}}))
 
-	c, ok := r.ForMethod(paykit.MethodQR)
-	require.True(t, ok)
-	assert.Equal(t, "first", c.Name())
+	_, ok := r.ForMethod(paykit.MethodQR)
+	assert.False(t, ok, "hai connector khai qr mà không có mặc định: không đoán")
+	c, ok := r.ForMethod(paykit.MethodVisa)
+	require.True(t, ok, "đúng một connector khai visa thì trả nó")
+	assert.Equal(t, "second", c.Name())
 	_, ok = r.ForMethod(paykit.MethodPOS)
 	assert.False(t, ok)
 

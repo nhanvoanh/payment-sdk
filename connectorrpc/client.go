@@ -2,6 +2,7 @@ package connectorrpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,10 @@ type ClientOptions struct {
 	ReadyWait time.Duration
 }
 
+// ErrIdentityMismatch: Describe nhận được phản hồi nhưng tên hoặc phiên bản giao thức không khớp, tức địa chỉ
+// đang trỏ tới một tiến trình khác. Client khi đó bị cách ly cho tới lần Describe thành công sau.
+var ErrIdentityMismatch = errors.New("connectorrpc: connector ở địa chỉ này không phải connector đã cấu hình")
+
 // Description là những gì connector ở xa khai ở Describe.
 type Description struct {
 	Name       string
@@ -53,12 +58,17 @@ type ackResp struct {
 // Bất biến tiền: ErrProviderUnavailable chỉ trả khi kết nối chưa READY TRƯỚC khi gọi RPC (chắc chắn chưa
 // gửi) hoặc khi connector nói rõ trong thân phản hồi. Đã gọi RPC mà lỗi (kể cả codes.Unavailable) là
 // ErrUnknownOutcome. Không dùng WaitForReady và không bật retry của gRPC.
+//
+// Cách ly: Describe trả tên hoặc phiên bản giao thức sai thì mô tả bị xoá (Described, Supports, Methods đều
+// rỗng) và mọi RPC nghiệp vụ trả ErrProviderUnavailable mà không gửi, vì tiến trình bên kia không phải
+// connector đã cấu hình. Lỗi vận chuyển ở Describe không cách ly và giữ mô tả cũ.
 type Client struct {
-	name string
-	conn *grpc.ClientConn
-	rpc  connectorpb.ConnectorServiceClient
-	opts ClientOptions
-	desc atomic.Pointer[described]
+	name        string
+	conn        *grpc.ClientConn
+	rpc         connectorpb.ConnectorServiceClient
+	opts        ClientOptions
+	desc        atomic.Pointer[described]
+	quarantined atomic.Bool
 }
 
 // NewClient tạo proxy cho connector tên name. Chưa mô tả: gọi Describe trước khi dùng.
@@ -109,6 +119,10 @@ func (c *Client) waitReady(ctx context.Context) bool {
 // invoke gọi một RPC. notSent là lỗi trả khi kết nối không READY (chắc chắn chưa gửi); mọi lỗi sau khi
 // đã gọi là ErrUnknownOutcome, giữ nguyên văn lỗi gRPC.
 func (c *Client) invoke(ctx context.Context, method string, notSent error, send func(ctx context.Context) error) error {
+	if method != "Describe" && c.quarantined.Load() {
+		return fmt.Errorf("%w: %s: connector đang bị cách ly vì Describe trả sai danh tính, chưa gửi",
+			connector.ErrProviderUnavailable, method)
+	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.opts.CallTimeout)
@@ -134,10 +148,12 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 		return Description{}, err
 	}
 	if resp.GetProtocolVersion() != ProtocolVersion {
-		return Description{}, fmt.Errorf("connectorrpc: phiên bản giao thức %d, cần %d", resp.GetProtocolVersion(), ProtocolVersion)
+		c.quarantine()
+		return Description{}, fmt.Errorf("%w: phiên bản giao thức %d, cần %d", ErrIdentityMismatch, resp.GetProtocolVersion(), ProtocolVersion)
 	}
 	if resp.GetName() != c.name {
-		return Description{}, fmt.Errorf("connectorrpc: connector tên %q, cấu hình là %q", resp.GetName(), c.name)
+		c.quarantine()
+		return Description{}, fmt.Errorf("%w: connector tên %q, cấu hình là %q", ErrIdentityMismatch, resp.GetName(), c.name)
 	}
 	d := &described{Description: Description{Name: resp.GetName(), Operations: map[connector.Operation]bool{}}}
 	for _, m := range resp.GetMethods() {
@@ -164,7 +180,14 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 		}
 	}
 	c.desc.Store(d)
+	c.quarantined.Store(false)
 	return d.copyOut(), nil
+}
+
+// quarantine chặn RPC nghiệp vụ trước rồi mới xoá mô tả, để không lời gọi nào thấy "chưa cách ly" sau khi mô tả đã mất.
+func (c *Client) quarantine() {
+	c.quarantined.Store(true)
+	c.desc.Store(nil)
 }
 
 func (d *described) copyOut() Description {

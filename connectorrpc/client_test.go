@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -307,5 +308,115 @@ func TestClient_EmptyResponseIsUnknown(t *testing.T) {
 	c := grpctest.Loopback(t, f)
 	if err := create(context.Background(), c); !errors.Is(err, connector.ErrUnknownOutcome) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// switchDescribe trả mô tả có thể đổi khi đang chạy, như khi địa chỉ bị trỏ sang tiến trình khác.
+type switchDescribe struct {
+	connectorpb.ConnectorServiceServer
+	name atomic.Value // string
+}
+
+func (d *switchDescribe) Describe(context.Context, *connectorpb.DescribeRequest) (*connectorpb.DescribeResponse, error) {
+	return &connectorpb.DescribeResponse{ProtocolVersion: connectorrpc.ProtocolVersion, Name: d.name.Load().(string),
+		Methods: []string{"qr"}, Operations: []string{"webhook", "redirect", "charge", "cancel", "refund", "query_payment", "query_refund"},
+		WebhookAcks: fullAcks()}, nil
+}
+
+// businessCalls gọi mọi RPC nghiệp vụ một lần và trả lỗi của từng cái.
+func businessCalls(c *connectorrpc.Client) map[string]error {
+	ctx := context.Background()
+	out := map[string]error{}
+	_, out["create"] = c.CreatePayment(ctx, connector.CreatePaymentRequest{TransactionCode: "T"})
+	_, out["charge"] = c.Charge(ctx, connector.ChargeRequest{TransactionCode: "T"})
+	_, out["query"] = c.QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "T"})
+	_, out["cancel"] = c.CancelPayment(ctx, connector.CancelRequest{TransactionCode: "T"})
+	_, out["refund"] = c.CreateRefund(ctx, connector.RefundRequest{RefundCode: "R"})
+	_, out["query_refund"] = c.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R"})
+	_, out["parse_webhook"] = c.ParseWebhook(ctx, connector.RawWebhook{Body: []byte("{}")})
+	_, out["parse_redirect"] = c.ParseRedirect(ctx, connector.RawWebhook{Body: []byte("{}")})
+	return out
+}
+
+func TestDescribe_IdentityMismatchQuarantines(t *testing.T) {
+	sd := &switchDescribe{ConnectorServiceServer: connectorrpc.NewServer(newFake())}
+	sd.name.Store("acme")
+	var rpcs atomic.Int32 // mọi RPC trừ Describe tới được server
+	srv := grpctest.New(t, sd, grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		if !strings.HasSuffix(info.FullMethod, "/Describe") {
+			rpcs.Add(1)
+		}
+		return h(ctx, req)
+	}))
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if _, err := c.Describe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sd.name.Store("other")
+	_, err := c.Describe(context.Background())
+	if !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
+	}
+	if c.Described() || len(c.Methods()) != 0 || c.Supports(connector.OpRefund) || c.Supports(connector.OpWebhook) {
+		t.Fatal("cách ly: Described/Methods/Supports phải rỗng")
+	}
+	if st, _, _ := c.AckWebhook(connector.OutcomeApplied); st != 500 {
+		t.Errorf("ack khi cách ly phải 500, có %d", st)
+	}
+	for op, err := range businessCalls(c) {
+		if !errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) {
+			t.Errorf("%s khi cách ly: muốn ErrProviderUnavailable (chưa gửi), có %v", op, err)
+		}
+	}
+	if n := rpcs.Load(); n != 0 {
+		t.Fatalf("cách ly mà vẫn có %d RPC tới server", n)
+	}
+
+	sd.name.Store("acme")
+	if _, err := c.Describe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Described() || !c.Supports(connector.OpRefund) {
+		t.Fatal("Describe đúng lại phải gỡ cách ly")
+	}
+	if err := create(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	if rpcs.Load() != 1 {
+		t.Fatalf("sau khi gỡ cách ly lệnh tạo phải tới server đúng một lần, có %d", rpcs.Load())
+	}
+}
+
+func TestDescribe_ProtocolMismatchQuarantines(t *testing.T) {
+	resp := &connectorpb.DescribeResponse{ProtocolVersion: connectorrpc.ProtocolVersion + 1, Name: "acme", Methods: []string{"qr"}}
+	f := newFake()
+	srv := grpctest.New(t, fakeDescribe{connectorrpc.NewServer(f), resp})
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if _, err := c.Describe(context.Background()); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
+	}
+	if err := create(context.Background(), c); !errors.Is(err, connector.ErrProviderUnavailable) {
+		t.Fatalf("muốn ErrProviderUnavailable, có %v", err)
+	}
+	if f.Calls("create") != 0 {
+		t.Fatal("cách ly mà lệnh tạo vẫn tới connector")
+	}
+}
+
+// Lỗi vận chuyển ở Describe (không có phản hồi) không cách ly: giữ mô tả cũ.
+func TestDescribe_TransportErrorKeepsDescription(t *testing.T) {
+	srv := grpctest.New(t, connectorrpc.NewServer(newFake()))
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{ReadyWait: testReadyWait})
+	if _, err := c.Describe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv.Kill(t)
+	_, err := c.Describe(context.Background())
+	if err == nil || errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn lỗi vận chuyển, có %v", err)
+	}
+	if !c.Described() || !c.Supports(connector.OpRefund) || len(c.Methods()) == 0 {
+		t.Fatal("lỗi vận chuyển phải giữ mô tả cũ")
 	}
 }

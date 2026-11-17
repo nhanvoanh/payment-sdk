@@ -68,3 +68,28 @@ func TestRegistry_ConcurrentReadersAndLateRegister(t *testing.T) {
 	wg.Wait()
 	assert.Len(t, r.Names(), 50)
 }
+
+// Không có mặc định: chọn theo thứ tự đăng ký là chọn theo connector nào Describe xong trước (ngẫu nhiên
+// theo pod, theo lần khởi động), nên lệnh tiền sẽ đi sang đối tác tuỳ hứng. Hơn một ứng viên thì không trả gì.
+func TestForMethod_AmbiguousWithoutDefaultReturnsNothing(t *testing.T) {
+	for _, order := range [][]string{{"a", "b"}, {"b", "a"}} {
+		r := NewRegistry()
+		for _, n := range order {
+			require.NoError(t, r.Register(baseConn{name: n, methods: []paykit.Method{paykit.MethodQR}}))
+		}
+		_, ok := r.ForMethod(paykit.MethodQR)
+		assert.False(t, ok, "thứ tự %v", order)
+
+		require.NoError(t, r.SetDefault(paykit.MethodQR, "b"))
+		c, ok := r.ForMethod(paykit.MethodQR)
+		require.True(t, ok)
+		assert.Equal(t, "b", c.Name(), "mặc định tường minh gỡ mơ hồ")
+	}
+
+	r := NewRegistry()
+	require.NoError(t, r.Register(baseConn{name: "a", methods: []paykit.Method{paykit.MethodQR}}))
+	require.NoError(t, r.Register(baseConn{name: "b", methods: []paykit.Method{paykit.MethodVisa}}))
+	c, ok := r.ForMethod(paykit.MethodQR)
+	require.True(t, ok, "đúng một ứng viên thì trả nó")
+	assert.Equal(t, "a", c.Name())
+}

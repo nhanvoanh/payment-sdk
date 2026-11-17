@@ -51,7 +51,8 @@ func (r *Registry) Get(name string) (Connector, bool) {
 
 // ForMethod: method có mặc định thì chỉ trả đúng connector đó khi nó đã đăng ký và khai method;
 // không bao giờ rơi sang connector khác (mặc định có thể đặt trước cho connector từ xa đăng ký muộn).
-// Không có mặc định thì trả connector đăng ký đầu tiên hỗ trợ method.
+// Không có mặc định thì chỉ trả khi đúng MỘT connector đã đăng ký khai method; hơn một thì không đoán
+// (thứ tự đăng ký của connector từ xa là ngẫu nhiên, lệnh tiền không được đi theo nó).
 func (r *Registry) ForMethod(m paykit.Method) (Connector, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -62,12 +63,16 @@ func (r *Registry) ForMethod(m paykit.Method) (Connector, bool) {
 		}
 		return nil, false
 	}
+	var found Connector
 	for _, name := range r.order {
 		if supportsMethod(r.byName[name], m) {
-			return r.byName[name], true
+			if found != nil {
+				return nil, false
+			}
+			found = r.byName[name]
 		}
 	}
-	return nil, false
+	return found, found != nil
 }
 
 // SetDefault không đòi connector đã đăng ký: connector từ xa có thể đăng ký sau khi cấu hình đã đặt mặc định.
