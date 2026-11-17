@@ -3,13 +3,17 @@ package providerhttp_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,27 +101,62 @@ func TestDo_ConnectionRefusedIsUnavailable(t *testing.T) {
 	}
 }
 
+func newClientRT(t *testing.T, rt http.RoundTripper) *providerhttp.Client {
+	t.Helper()
+	c, err := providerhttp.NewWithTransport(providerhttp.Config{Timeout: 5 * time.Second}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func trace(r *http.Request) *httptrace.ClientTrace { return httptrace.ContextClientTrace(r.Context()) }
+
+// Transport thật bắn GetConn rồi mới phân giải tên; lỗi DNS nghĩa là chưa có kết nối.
 func TestDo_DNSFailureIsUnavailable(t *testing.T) {
-	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		trace(r).GetConn("x.invalid:80")
 		return nil, &net.DNSError{Err: "no such host", Name: "x.invalid", IsNotFound: true}
 	})
-	_, err := newClient(t, providerhttp.Config{Transport: rt}).Do(get(t, "http://x.invalid/"))
+	_, err := newClientRT(t, rt).Do(get(t, "http://x.invalid/"))
 	_ = requireKind(t, err, connector.ErrProviderUnavailable)
 }
 
-// Một lần thử đã ghi header rồi lần thử sau (net/http tự gửi lại) thất bại trước khi ghi: vẫn là unknown.
-func TestDo_AnyAttemptWroteIsUnknown(t *testing.T) {
-	var n int
+// Transport không bắn hook nào: không có chứng cứ dương nên là unknown.
+func TestDo_NoHooksIsUnknown(t *testing.T) {
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("boom") })
+	_, err := newClientRT(t, rt).Do(get(t, "http://x.invalid/"))
+	_ = requireKind(t, err, connector.ErrUnknownOutcome)
+}
+
+// Đã có kết nối (GotConn) mà lỗi, dù chưa hook Wrote* nào: unknown.
+func TestDo_GotConnThenErrorIsUnknown(t *testing.T) {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		n++
-		if n == 1 {
-			httptrace.ContextClientTrace(r.Context()).WroteHeaders()
-		}
+		trace(r).GetConn("h:80")
+		trace(r).GotConn(httptrace.GotConnInfo{})
+		return nil, errors.New("reset")
+	})
+	_, err := newClientRT(t, rt).Do(get(t, "http://x.invalid/"))
+	_ = requireKind(t, err, connector.ErrUnknownOutcome)
+}
+
+// Hai lần thử trong một RoundTrip (như net/http tự gửi lại): lần 1 đã ghi header, lần 2 chỉ GetConn rồi
+// lỗi dial. Cờ dính nên kết quả vẫn là unknown.
+func TestDo_FlagsStickyAcrossAttempts(t *testing.T) {
+	var attempts int
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		tr := trace(r)
+		attempts++
+		tr.GetConn("h:80")
+		tr.GotConn(httptrace.GotConnInfo{Reused: true})
+		tr.WroteHeaders()
+		attempts++
+		tr.GetConn("h:80")
 		return nil, errors.New("dial tcp: connection refused")
 	})
-	_, err := newClient(t, providerhttp.Config{Transport: rt}).Do(get(t, "http://x.invalid/"))
-	if n != 1 {
-		t.Fatalf("transport giả bị gọi %d lần", n)
+	_, err := newClientRT(t, rt).Do(get(t, "http://x.invalid/"))
+	if attempts != 2 {
+		t.Fatalf("attempts = %d", attempts)
 	}
 	_ = requireKind(t, err, connector.ErrUnknownOutcome)
 }
@@ -287,20 +326,67 @@ func TestDo_RawRedactedAndCapped(t *testing.T) {
 	}
 }
 
-func TestDo_RequestBodyOverLimitFailsBeforeSend(t *testing.T) {
+func TestDo_RequestBodyOverLimitIsUnavailableBeforeSend(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
 	defer srv.Close()
-	c := newClient(t, providerhttp.Config{MaxResponseBytes: 10})
+	c := newClient(t, providerhttp.Config{MaxRequestBytes: 10, MaxResponseBytes: 1})
 	_, err := c.Do(post(context.Background(), t, srv.URL, strings.Repeat("a", 11)))
-	if err == nil {
-		t.Fatal("muốn lỗi")
-	}
-	if errors.Is(err, connector.ErrUnknownOutcome) || errors.Is(err, connector.ErrProviderUnavailable) {
-		t.Fatalf("lỗi của người gọi không được mang sentinel: %v", err)
+	pe := requireKind(t, err, connector.ErrProviderUnavailable)
+	if pe.Raw.RequestBody == "" {
+		t.Fatal("Raw phải có thân đã đọc")
 	}
 	if hits.Load() != 0 {
 		t.Fatal("không được gửi")
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("đĩa hỏng") }
+
+func TestDo_RequestBodyReadErrorIsUnavailable(t *testing.T) {
+	req := get(t, "http://127.0.0.1:1/")
+	req.Method, req.Body = http.MethodPost, io.NopCloser(errReader{})
+	_, err := newClient(t, providerhttp.Config{}).Do(req)
+	_ = requireKind(t, err, connector.ErrProviderUnavailable)
+}
+
+// Reader treo: hạn Timeout vẫn có hiệu lực, vẫn là chưa gửi.
+func TestDo_RequestBodyReadHonoursTimeout(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	req := get(t, "http://127.0.0.1:1/")
+	req.Method, req.Body = http.MethodPost, pr
+	c := newClient(t, providerhttp.Config{Timeout: 50 * time.Millisecond})
+	_, err := c.Do(req)
+	_ = requireKind(t, err, connector.ErrProviderUnavailable)
+}
+
+// POST không có Idempotency-Key không bao giờ bị gửi hai lần, kể cả khi server đóng kết nối tái dùng
+// sau khi nhận.
+func TestDo_PostWithoutIdempotencyKeyNeverResent(t *testing.T) {
+	var pays atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.URL.Path != "/pay" {
+			return
+		}
+		pays.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer srv.Close()
+	c := newClient(t, providerhttp.Config{})
+	if _, err := c.Do(post(context.Background(), t, srv.URL+"/warm", "x")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.Do(post(context.Background(), t, srv.URL+"/pay", "x"))
+	_ = requireKind(t, err, connector.ErrUnknownOutcome)
+	if n := pays.Load(); n != 1 {
+		t.Fatalf("server nhận %d lần", n)
 	}
 }
 
@@ -342,5 +428,88 @@ func TestPool_ReusesConnections(t *testing.T) {
 	}
 	if n := conns.Load(); n > 2 {
 		t.Fatalf("mở %d kết nối cho 100 request tuần tự", n)
+	}
+}
+
+func tlsServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(h)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Client mặc định không đàm phán h2 dù server cho phép, kể cả khi người dùng khai NextProtos có h2.
+func TestDefaultClientDoesNotNegotiateHTTP2(t *testing.T) {
+	var proto atomic.Int32
+	srv := tlsServer(t, func(_ http.ResponseWriter, r *http.Request) { proto.Store(int32(r.ProtoMajor)) })
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	for _, protos := range [][]string{nil, {"h2", "http/1.1"}} {
+		proto.Store(0)
+		c := newClient(t, providerhttp.Config{TLSClientConfig: &tls.Config{RootCAs: pool, NextProtos: protos}})
+		if _, err := c.Do(get(t, srv.URL)); err != nil {
+			t.Fatal(err)
+		}
+		if proto.Load() != 1 {
+			t.Fatalf("NextProtos=%v: server thấy HTTP/%d", protos, proto.Load())
+		}
+	}
+}
+
+// Luật phân loại tự đủ, không dựa vào việc tắt h2: với transport h2 tiêm vào, không request nào server
+// đã nhận mà client báo unavailable (ctx hết hạn rải quanh thời điểm ghi frame HEADERS).
+func TestDo_HTTP2NeverUnavailableAfterServerReceived(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	var h2 atomic.Bool
+	srv := tlsServer(t, func(_ http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 {
+			h2.Store(true)
+		}
+		mu.Lock()
+		seen[r.URL.Query().Get("id")] = true
+		mu.Unlock()
+	})
+	c := newClientRT(t, srv.Client().Transport)
+	if _, err := c.Do(get(t, srv.URL+"/?id=warm")); err != nil {
+		t.Fatal(err)
+	}
+	if !h2.Load() {
+		t.Fatal("transport tiêm không nói h2, test vô nghĩa")
+	}
+	var umu sync.Mutex
+	var unavailable []string
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		g := g
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 400; i++ {
+				id := fmt.Sprintf("%d-%d", g, i)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(i%800)*500*time.Nanosecond)
+				req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/pay?id="+id, nil)
+				req.Header.Set("Authorization", "Bearer x")
+				_, err := c.Do(req)
+				cancel()
+				if errors.Is(err, connector.ErrProviderUnavailable) {
+					umu.Lock()
+					unavailable = append(unavailable, id)
+					umu.Unlock()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	srv.CloseClientConnections() // chờ handler đang dở xong
+	srv.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	for _, id := range unavailable {
+		if seen[id] {
+			t.Errorf("request %s server đã nhận nhưng client báo unavailable", id)
+		}
 	}
 }
