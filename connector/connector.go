@@ -1,0 +1,172 @@
+package connector
+
+import (
+	"context"
+	"time"
+
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+)
+
+// Connector là phần bắt buộc; mọi năng lực khác là interface tuỳ chọn bên dưới.
+type Connector interface {
+	Name() string
+	Methods() []paykit.Method
+	CreatePayment(ctx context.Context, req CreatePaymentRequest) (CreatePaymentResult, error)
+}
+
+type PaymentQuerier interface {
+	QueryPayment(ctx context.Context, req QueryPaymentRequest) (PaymentStatus, error)
+}
+
+type WebhookReceiver interface {
+	ParseWebhook(ctx context.Context, raw RawWebhook) (ProviderEvent, error)
+	AckWebhook(outcome WebhookOutcome) (status int, body []byte, contentType string)
+}
+
+type Redirecter interface {
+	ParseRedirect(ctx context.Context, raw RawWebhook) (ProviderEvent, error)
+}
+
+type Charger interface {
+	Charge(ctx context.Context, req ChargeRequest) (ChargeResult, error)
+}
+
+type Canceler interface {
+	CancelPayment(ctx context.Context, req CancelRequest) (CancelResult, error)
+}
+
+type Refunder interface {
+	CreateRefund(ctx context.Context, req RefundRequest) (RefundResult, error)
+}
+
+type RefundQuerier interface {
+	QueryRefund(ctx context.Context, req QueryRefundRequest) (RefundStatus, error)
+}
+
+// RawExchange là bản ghi một lần gọi đối tác, để lưu vết.
+type RawExchange struct {
+	RequestBody, ResponseBody string
+	HTTPStatus                int
+	DurationMS                int64
+}
+
+// RawWebhook là request đến nguyên bản, chưa kiểm chữ ký.
+type RawWebhook struct {
+	Headers  map[string][]string
+	Query    map[string][]string
+	Body     []byte
+	RemoteIP string
+}
+
+type CreatePaymentRequest struct {
+	TransactionCode, IdempotencyKey string
+	Money                           paykit.Money
+	Method                          paykit.Method
+	Customer                        paykit.Customer
+	ReturnURL, CancelURL, ClientIP  string
+	Metadata                        map[string]string
+}
+
+type CreatePaymentResult struct {
+	ProviderRef string
+	Status      Status
+	NextAction  paykit.NextAction
+	ExpiresAt   time.Time
+	Raw         RawExchange
+}
+
+type QueryPaymentRequest struct {
+	TransactionCode, ProviderRef string
+}
+
+type PaymentStatus struct {
+	Found                         bool
+	Status                        Status
+	ProviderRef                   string
+	AmountPaid                    paykit.Money
+	PaidAt                        time.Time
+	Card                          *paykit.CardMasked
+	ProviderCode, ProviderMessage string
+	Raw                           RawExchange
+}
+
+type EventKind string
+
+const (
+	EventKindPayment EventKind = "payment"
+	EventKindRefund  EventKind = "refund"
+)
+
+// ProviderEvent là sự kiện đã chuẩn hoá từ webhook hoặc redirect.
+type ProviderEvent struct {
+	EventID                       string
+	Kind                          EventKind
+	TransactionCode, RefundCode   string
+	ProviderRef                   string
+	Status                        Status
+	AmountPaid                    paykit.Money
+	PaidAt                        time.Time
+	Card                          *paykit.CardMasked
+	ProviderCode, ProviderMessage string
+	Raw                           []byte
+}
+
+// WebhookOutcome là kết quả xử lý phía core, để connector dựng phản hồi đúng định dạng đối tác.
+type WebhookOutcome string
+
+const (
+	OutcomeApplied   WebhookOutcome = "applied"
+	OutcomeDuplicate WebhookOutcome = "duplicate"
+	OutcomeIgnored   WebhookOutcome = "ignored"
+	OutcomeRejected  WebhookOutcome = "rejected"
+)
+
+type ChargeRequest struct {
+	TransactionCode, IdempotencyKey string
+	Money                           paykit.Money
+	Method                          paykit.Method
+	Customer                        paykit.Customer
+	ReturnURL, CancelURL, ClientIP  string
+	Metadata                        map[string]string
+}
+
+type ChargeResult struct {
+	ProviderRef string
+	Status      Status
+	AmountPaid  paykit.Money
+	PaidAt      time.Time
+	NextAction  paykit.NextAction
+	Raw         RawExchange
+}
+
+type CancelRequest struct {
+	TransactionCode, ProviderRef, IdempotencyKey string
+}
+
+type CancelResult struct {
+	Status Status
+	Raw    RawExchange
+}
+
+type RefundRequest struct {
+	RefundCode, IdempotencyKey, TransactionCode, ProviderRef string
+	Money                                                    paykit.Money
+	Reason, CustomerID                                       string
+}
+
+type RefundResult struct {
+	ProviderRef string
+	Status      Status
+	Raw         RawExchange
+}
+
+type QueryRefundRequest struct {
+	RefundCode, ProviderRef, TransactionCode string
+}
+
+type RefundStatus struct {
+	Found                                      bool
+	Status                                     Status
+	ProviderRef, ProviderCode, ProviderMessage string
+	Raw                                        RawExchange
+}
