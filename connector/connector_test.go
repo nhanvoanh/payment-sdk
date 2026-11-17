@@ -128,8 +128,7 @@ func TestRegistry_ForMethodAndSetDefault(t *testing.T) {
 	_, ok = r.ForMethod(paykit.MethodPOS)
 	assert.False(t, ok)
 
-	assert.Error(t, r.SetDefault(paykit.MethodQR, "nope"))
-	assert.Error(t, r.SetDefault(paykit.MethodVisa, "first"))
+	assert.Error(t, r.SetDefault(paykit.MethodQR, ""))
 
 	require.NoError(t, r.SetDefault(paykit.MethodQR, "second"))
 	c, ok = r.ForMethod(paykit.MethodQR)

@@ -2,6 +2,7 @@ package connector
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"sync"
 
@@ -16,14 +17,20 @@ type Registry struct {
 	defaults map[paykit.Method]string
 }
 
+// Tên connector: chữ thường, số, gạch dưới, tối đa 32 ký tự; cùng định dạng với nhãn log/metric.
+var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
 func NewRegistry() *Registry {
 	return &Registry{byName: map[string]Connector{}, defaults: map[paykit.Method]string{}}
 }
 
 func (r *Registry) Register(c Connector) error {
+	if c == nil {
+		return fmt.Errorf("connector: connector nil")
+	}
 	name := c.Name()
-	if name == "" {
-		return fmt.Errorf("connector: tên rỗng")
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("connector: tên %q không hợp lệ (cần %s)", name, namePattern)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -42,12 +49,18 @@ func (r *Registry) Get(name string) (Connector, bool) {
 	return c, ok
 }
 
-// ForMethod trả connector mặc định của method nếu có, không thì connector đăng ký đầu tiên hỗ trợ nó.
+// ForMethod: method có mặc định thì chỉ trả đúng connector đó khi nó đã đăng ký và khai method;
+// không bao giờ rơi sang connector khác (mặc định có thể đặt trước cho connector từ xa đăng ký muộn).
+// Không có mặc định thì trả connector đăng ký đầu tiên hỗ trợ method.
 func (r *Registry) ForMethod(m paykit.Method) (Connector, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if name, ok := r.defaults[m]; ok {
-		return r.byName[name], true
+		c, registered := r.byName[name]
+		if registered && supportsMethod(c, m) {
+			return c, true
+		}
+		return nil, false
 	}
 	for _, name := range r.order {
 		if supportsMethod(r.byName[name], m) {
@@ -57,16 +70,13 @@ func (r *Registry) ForMethod(m paykit.Method) (Connector, bool) {
 	return nil, false
 }
 
+// SetDefault không đòi connector đã đăng ký: connector từ xa có thể đăng ký sau khi cấu hình đã đặt mặc định.
 func (r *Registry) SetDefault(m paykit.Method, name string) error {
+	if name == "" {
+		return fmt.Errorf("connector: tên mặc định rỗng")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	c, ok := r.byName[name]
-	if !ok {
-		return fmt.Errorf("connector: %q chưa đăng ký", name)
-	}
-	if !supportsMethod(c, m) {
-		return fmt.Errorf("connector: %q không hỗ trợ method %q", name, m)
-	}
 	r.defaults[m] = name
 	return nil
 }
