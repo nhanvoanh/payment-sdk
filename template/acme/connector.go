@@ -76,7 +76,7 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 		return connector.CreatePaymentResult{}, err
 	}
 	var w paymentJSON
-	if err := reply(resp, &w); err != nil {
+	if err := reply(resp, &w, rejectCreate); err != nil {
 		return connector.CreatePaymentResult{}, err
 	}
 	st, na, expires, err := w.forCreate()
@@ -102,7 +102,7 @@ func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPayment
 		return connector.PaymentStatus{Found: false, Raw: resp.Raw}, nil
 	}
 	var w paymentJSON
-	if err := reply(resp, &w); err != nil {
+	if err := reply(resp, &w, nil); err != nil {
 		return connector.PaymentStatus{}, err
 	}
 	if err := w.validate(); err != nil {
@@ -124,7 +124,7 @@ func (c *Connector) CancelPayment(ctx context.Context, req connector.CancelReque
 		return connector.CancelResult{}, err
 	}
 	var w paymentJSON
-	if err := reply(resp, &w); err != nil {
+	if err := reply(resp, &w, rejectCancel); err != nil {
 		return connector.CancelResult{}, err
 	}
 	if err := w.validate(); err != nil {
@@ -145,7 +145,7 @@ func (c *Connector) CreateRefund(ctx context.Context, req connector.RefundReques
 		return connector.RefundResult{}, err
 	}
 	var w refundJSON
-	if err := reply(resp, &w); err != nil {
+	if err := reply(resp, &w, rejectRefund); err != nil {
 		return connector.RefundResult{}, err
 	}
 	st, err := w.status()
@@ -165,7 +165,7 @@ func (c *Connector) QueryRefund(ctx context.Context, req connector.QueryRefundRe
 		return connector.RefundStatus{Found: false, Raw: resp.Raw}, nil
 	}
 	var w refundJSON
-	if err := reply(resp, &w); err != nil {
+	if err := reply(resp, &w, nil); err != nil {
 		return connector.RefundStatus{}, err
 	}
 	st, err := w.status()
@@ -339,18 +339,27 @@ func (c *Connector) url(path string, q url.Values) string {
 	return u.String()
 }
 
-// rejectCodes là các mã lỗi 4xx mà tài liệu acme nói rõ là từ chối CUỐI CÙNG (chưa và sẽ không xử lý).
-// Chỉ thêm mã vào đây khi tài liệu của đối tác nói vậy: nhiều đối tác trả 4xx có mã khi kết quả chưa ngã
-// ngũ (409 "đang xử lý", 408, 429), và RejectedError làm core chốt thất bại trong khi tiền có thể đã đi.
-var rejectCodes = map[string]bool{"declined": true, "invalid_request": true, "already_paid": true, "not_found": true}
+// Mã từ chối THEO TỪNG THAO TÁC. Cùng một mã có thể là từ chối cuối cùng ở thao tác này và là "tiền đã
+// đi" ở thao tác khác, nên không có tập chung. Chỉ thêm mã khi tài liệu của đối tác nói rõ nó là từ chối
+// cuối cùng, chắc chắn không có tiền nào đổi chủ, cho ĐÚNG thao tác đó. Mã ngoài tập: ErrUnknownOutcome.
+var (
+	// Tạo: declined (acme từ chối thu) và invalid_request (request sai, chưa tạo gì) là cuối cùng.
+	// already_paid KHÔNG ở đây: lệnh tạo trước bị thất lạc phản hồi rồi gửi lại thì nó nghĩa là acme ĐÃ thu tiền.
+	rejectCreate = map[string]bool{"declined": true, "invalid_request": true}
+	// Huỷ: already_paid là từ chối đúng (không huỷ được, tiền vẫn ở acme); not_found: không có gì để huỷ.
+	rejectCancel = map[string]bool{"declined": true, "invalid_request": true, "already_paid": true, "not_found": true}
+	// Hoàn: declined và invalid_request chưa hoàn gì; not_found: giao dịch gốc không tồn tại nên không có gì để hoàn.
+	rejectRefund = map[string]bool{"declined": true, "invalid_request": true, "not_found": true}
+	// Truy vấn không có "từ chối": nil. not_found là Found=false (isNotFound), mã khác là chưa rõ.
+)
 
 // reply đổi phản hồi đã đọc trọn thành nil (và điền out) hoặc lỗi đúng luật tiền:
 //   - 2xx với thân hợp lệ: thành công.
-//   - 4xx có mã trong rejectCodes: acme nói rõ từ chối, RejectedError (mã và lời nhắn đi tiếp).
-//   - mọi thứ khác (5xx, 3xx, 4xx mã chưa ánh xạ hoặc không có mã, 2xx với thân rác):
+//   - 4xx có mã trong rejects (tập của thao tác đang gọi): acme nói rõ từ chối, RejectedError.
+//   - mọi thứ khác (5xx, 3xx, 4xx mã ngoài tập hoặc không có mã, 2xx với thân rác):
 //     ErrUnknownOutcome. Không bao giờ unavailable: acme đã trả lời nên có thể đã xử lý, ta chỉ không
 //     hiểu được. Chốt "thất bại" ở đây là để khách trả tiền hai lần.
-func reply(resp *providerhttp.Response, out any) error {
+func reply(resp *providerhttp.Response, out any, rejects map[string]bool) error {
 	switch {
 	case resp.Status >= 200 && resp.Status < 300:
 		if err := json.Unmarshal(resp.Body, out); err != nil {
@@ -358,7 +367,7 @@ func reply(resp *providerhttp.Response, out any) error {
 		}
 		return nil
 	case resp.Status >= 400 && resp.Status < 500:
-		if code, msg, ok := errorCode(resp.Body); ok && rejectCodes[code] {
+		if code, msg, ok := errorCode(resp.Body); ok && rejects[code] {
 			return &connector.RejectedError{Code: code, Message: msg}
 		}
 	}
@@ -367,7 +376,7 @@ func reply(resp *providerhttp.Response, out any) error {
 
 func isNotFound(resp *providerhttp.Response) bool {
 	code, _, ok := errorCode(resp.Body)
-	return resp.Status == http.StatusNotFound && ok && code == "not_found"
+	return ok && code == "not_found" // theo mã của acme, bất kể mã HTTP
 }
 
 // badBody: acme đã trả lời nhưng ta không hiểu: không rõ kết quả.

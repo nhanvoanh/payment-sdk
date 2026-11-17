@@ -71,7 +71,7 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 | Hết hạn hoặc đứt sau khi đã gửi | `ErrUnknownOutcome` | `providerhttp` phân loại. Acme có thể đã trừ tiền. |
 | 401 lần đầu | làm mới token, gửi lại **một** lần | 401 là từ chối trước khi xử lý nên gửi lại không thể trừ tiền hai lần. Gửi cùng `Idempotency-Key`. |
 | 401 lần hai | `ErrProviderUnavailable` | Chỉ đúng khi tài liệu của đối tác bảo đảm 401 là từ chối trước khi xử lý; không được giả định. Không có bảo đảm đó thì dùng `ErrUnknownOutcome`. |
-| 4xx có mã trong `rejectCodes` (`declined`, `invalid_request`, `already_paid`, `not_found`) | `*connector.RejectedError{Code, Message}` | Tài liệu acme nói rõ đó là từ chối cuối cùng. **Mã chưa ánh xạ là chưa rõ**; chỉ thêm mã vào danh sách khi tài liệu của đối tác nói rõ đó là từ chối cuối cùng (nhiều đối tác trả 4xx có mã cho "đang xử lý", 408, 429). |
+| 4xx có mã thuộc tập từ chối của thao tác (bảng dưới) | `*connector.RejectedError{Code, Message}` | Tài liệu acme nói rõ đó là từ chối cuối cùng của thao tác này. Mã ngoài tập là chưa rõ: `ErrUnknownOutcome`. |
 | 404 `not_found` khi truy vấn thanh toán hoặc hoàn tiền | `Found=false`, không lỗi | Core truy vấn cả giao dịch chưa tới được acme; lỗi ở đây khiến giao dịch không bao giờ đóng được. |
 | 5xx, 3xx, 4xx mã chưa ánh xạ hoặc không có mã | `ErrUnknownOutcome` | Acme (hoặc proxy giữa đường) đã trả lời nên có thể đã xử lý. Không bao giờ unavailable. |
 | 2xx với thân không hiểu được, thiếu trường, trạng thái lạ | `ErrUnknownOutcome` | Tiền có thể đã đi; không đoán "thất bại". |
@@ -80,6 +80,18 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 | Webhook sai chữ ký | `ErrInvalidSignature` | Kiểm trên byte thô trước khi đọc thân. |
 | Webhook loại không liên quan | `ErrEventNotRelevant` | Đã xác thực nhưng không có gì để áp. |
 | Huỷ thanh toán đã trả | `RejectedError` (409 `already_paid`) | Không bao giờ tự báo `canceled` khi acme không nói vậy. |
+
+### Mã lỗi acme theo từng thao tác
+
+**Cùng một mã có thể là từ chối ở thao tác này và là "đã có tiền" ở thao tác khác.** Vì vậy mỗi thao tác có tập mã riêng
+(`rejectCreate`, `rejectCancel`, `rejectRefund` trong `connector.go`); chỉ thêm mã khi tài liệu của đối tác nói rõ nó là từ chối cuối cùng, chắc chắn không có tiền nào đổi chủ, cho đúng thao tác đó.
+
+| Mã | Tạo thanh toán | Huỷ | Hoàn tiền | Truy vấn |
+|---|---|---|---|---|
+| `declined`, `invalid_request` | Rejected | Rejected | Rejected | Unknown |
+| `already_paid` | **Unknown** (acme đã thu tiền, ví dụ lệnh tạo trước thất lạc phản hồi) | Rejected (không huỷ được, tiền ở lại acme) | **Unknown** | Unknown |
+| `not_found` | Unknown | Rejected | Rejected | `Found=false` (theo mã, bất kể mã HTTP) |
+| mã khác hoặc không có mã | Unknown | Unknown | Unknown | Unknown |
 
 ## Luật conformance
 

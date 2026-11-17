@@ -60,6 +60,7 @@ func TestForbiddenNames(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatal(err)
+		// Lỗi duyệt thường mang đường dẫn: không in, vì đường dẫn có thể chứa từ khoá.
+		t.Fatal("không duyệt được cây thư mục sdk/")
 	}
 }

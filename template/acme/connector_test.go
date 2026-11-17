@@ -323,7 +323,7 @@ func stub(t *testing.T, token, pay http.HandlerFunc) (*acme.Connector, func() in
 	hits := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth/token", token)
-	mux.HandleFunc("/v1/payments", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		hits++
 		mu.Unlock()
@@ -389,6 +389,49 @@ func TestAcme_UnmappedClientErrorCodeIsUnknown(t *testing.T) {
 				t.Fatalf("err = %v, cần ErrUnknownOutcome và không phải Rejected", err)
 			}
 		})
+	}
+}
+
+func errorStub(t *testing.T, status int, code string) *acme.Connector {
+	t.Helper()
+	c, _ := stub(t, goodToken, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"error":{"code":"` + code + `","message":"m"}}`))
+	})
+	return c
+}
+
+// already_paid khi TẠO nghĩa là acme đã thu tiền (lệnh trước bị thất lạc phản hồi): không bao giờ Rejected.
+func TestAcme_AlreadyPaidMeaningDependsOnOperation(t *testing.T) {
+	ctx := context.Background()
+	_, err := errorStub(t, 409, "already_paid").CreatePayment(ctx, createReq("TAP"))
+	if !errors.Is(err, connector.ErrUnknownOutcome) || errors.Is(err, connector.ErrProviderRejected) {
+		t.Errorf("tạo: err = %v, cần ErrUnknownOutcome", err)
+	}
+	_, err = errorStub(t, 409, "already_paid").CreateRefund(ctx, connector.RefundRequest{RefundCode: "R", ProviderRef: "p", Money: amount})
+	if !errors.Is(err, connector.ErrUnknownOutcome) || errors.Is(err, connector.ErrProviderRejected) {
+		t.Errorf("hoàn: err = %v, cần ErrUnknownOutcome", err)
+	}
+	_, err = errorStub(t, 409, "already_paid").CancelPayment(ctx, connector.CancelRequest{ProviderRef: "p"})
+	var rej *connector.RejectedError
+	if !errors.As(err, &rej) || rej.Code != "already_paid" {
+		t.Errorf("huỷ: err = %v, cần RejectedError already_paid", err)
+	}
+}
+
+func TestAcme_QueryNotFoundByCodeAnyHTTPStatus(t *testing.T) {
+	ctx := context.Background()
+	st, err := errorStub(t, 400, "not_found").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X"})
+	if err != nil || st.Found {
+		t.Errorf("QueryPayment: found=%v err=%v, cần Found=false không lỗi", st.Found, err)
+	}
+	rs, err := errorStub(t, 400, "not_found").QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "X"})
+	if err != nil || rs.Found {
+		t.Errorf("QueryRefund: found=%v err=%v, cần Found=false không lỗi", rs.Found, err)
+	}
+	_, err = errorStub(t, 400, "declined").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X"})
+	if !errors.Is(err, connector.ErrUnknownOutcome) || errors.Is(err, connector.ErrProviderRejected) {
+		t.Errorf("truy vấn với mã khác: err = %v, cần ErrUnknownOutcome", err)
 	}
 }
 
