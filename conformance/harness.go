@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,13 @@ type Partner interface {
 	SignedWebhook(transactionCode, providerRef string, status connector.Status, paid paykit.Money) connector.RawWebhook
 	// SetPaymentStatus quyết định câu trả lời cho lần truy vấn kế tiếp.
 	SetPaymentStatus(transactionCode string, status connector.Status, paid paykit.Money)
+}
+
+// Tamperer là phần tuỳ chọn của Partner: trả bản sao của một webhook đã ký với nội dung được ký bị sửa
+// (chữ ký giữ nguyên). Partner cài nó thì WHK-4 đòi đúng ErrInvalidSignature; không cài thì WHK-4 tự lật
+// một byte giữa thân và chỉ đòi connector không chấp nhận.
+type Tamperer interface {
+	TamperedWebhook(raw connector.RawWebhook) connector.RawWebhook
 }
 
 // Harness mô tả connector cần kiểm.
@@ -110,6 +118,7 @@ type env struct {
 	orig connector.Connector // connector của developer
 	p    Partner
 	ops  map[connector.Operation]bool // thao tác connector của developer khai (As… đúng)
+	srv  *serverHooks                 // khác nil ở lượt /grpc
 	rule string
 	seq  int
 
@@ -160,37 +169,46 @@ func normalCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), callLimit)
 }
 
-// panicLog ghi panic của connector phía server gRPC, để lượt /grpc cũng báo được chúng.
-type panicLog struct {
-	mu     sync.Mutex
-	panics []string
+// serverHooks là interceptor phía server gRPC: ghi panic của connector để lượt /grpc cũng báo được, và
+// khi luật đang chạy phần "đối tác treo" thì bọc ctx của handler bằng hạn ngắn hơn hạn của proxy.
+type serverHooks struct {
+	deadline atomic.Int64 // time.Duration; 0 là không bọc
+	mu       sync.Mutex
+	panics   []string
 }
 
-func (l *panicLog) intercept(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (resp any, err error) {
+func (s *serverHooks) setHandlerDeadline(d time.Duration) { s.deadline.Store(int64(d)) }
+
+func (s *serverHooks) intercept(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (resp any, err error) {
+	if d := time.Duration(s.deadline.Load()); d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
 	defer func() {
 		if r := recover(); r != nil {
-			l.mu.Lock()
-			l.panics = append(l.panics, fmt.Sprintf("%s: %v", info.FullMethod, r))
-			l.mu.Unlock()
+			s.mu.Lock()
+			s.panics = append(s.panics, fmt.Sprintf("%s: %v", info.FullMethod, r))
+			s.mu.Unlock()
 			err = status.Error(codes.Internal, "connector panic")
 		}
 	}()
 	return h(ctx, req)
 }
 
-func (l *panicLog) drain() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := l.panics
-	l.panics = nil
+func (s *serverHooks) drain() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.panics
+	s.panics = nil
 	return out
 }
 
 // loopback phục vụ c qua gRPC trên bufconn và trả proxy phía core đã Describe. Không dùng
 // grpctest.Loopback vì nó không bắt panic phía server (panic sẽ làm sập cả tiến trình test) và gọi
 // tb.Fatal khi Describe hỏng; ở đây Describe hỏng là lỗi trả về để thành finding của ID-1/grpc.
-func loopback(tb testing.TB, c connector.Connector) (*connectorrpc.Client, *panicLog, error) {
-	pl := &panicLog{}
+func loopback(tb testing.TB, c connector.Connector) (*connectorrpc.Client, *serverHooks, error) {
+	pl := &serverHooks{}
 	gh := grpctest.New(tb, connectorrpc.NewServer(c), grpc.ChainUnaryInterceptor(pl.intercept))
 	var name string
 	if err := guard(callLimit, func() { name = c.Name() }); err != nil {

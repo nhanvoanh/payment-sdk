@@ -111,20 +111,33 @@ func checkWHK3(e *env) {
 	}
 }
 
-// checkWHK4: sửa một byte giữa thân; chữ ký phải hỏng.
+// checkWHK4: webhook bị sửa không bao giờ được chấp nhận. Partner cài Tamperer thì nội dung được ký chắc
+// chắn đã đổi nên đòi đúng ErrInvalidSignature; không cài thì lật một byte giữa thân, byte đó có thể là
+// byte cấu trúc hay không được ký, nên chỉ đòi có lỗi.
 func checkWHK4(e *env) {
-	raw := cloneRaw(e.signed(e.tx()))
-	if len(raw.Body) == 0 {
-		e.skipf("SignedWebhook trả thân rỗng, không có byte để sửa")
-		return
+	signed := e.signed(e.tx())
+	t, strict := e.p.(Tamperer)
+	var raw connector.RawWebhook
+	if strict {
+		if g := guard(callLimit, func() { raw = t.TamperedWebhook(cloneRaw(signed)) }); g != nil {
+			e.skipf("Partner.TamperedWebhook hỏng: %v", g)
+			return
+		}
+	} else {
+		raw = cloneRaw(signed)
+		if len(raw.Body) == 0 {
+			e.skipf("SignedWebhook trả thân rỗng, không có byte để sửa; hãy cài Tamperer cho Partner")
+			return
+		}
+		raw.Body[len(raw.Body)/2] ^= 0x01
 	}
-	raw.Body[len(raw.Body)/2] ^= 0x01
 	_, ok, err := e.parse(raw)
-	if !ok {
-		return
-	}
-	if !errors.Is(err, connector.ErrInvalidSignature) {
-		e.fail("ParseWebhook với thân bị sửa một byte trả %v; cần lỗi khớp ErrInvalidSignature; kẻ gian giả được webhook báo đã thanh toán và lấy hàng không trả tiền", errText(err))
+	switch {
+	case !ok:
+	case err == nil:
+		e.fail("ParseWebhook chấp nhận webhook đã bị sửa (err nil); cần lỗi, nên là ErrInvalidSignature; kẻ gian giả được webhook báo đã thanh toán và lấy hàng không trả tiền")
+	case strict && !errors.Is(err, connector.ErrInvalidSignature):
+		e.fail("ParseWebhook với webhook bị sửa nội dung được ký (Partner.TamperedWebhook) trả %v; cần lỗi khớp ErrInvalidSignature; core không phân biệt được webhook giả với lỗi tạm thời, trả lỗi để đối tác gửi lại thay vì từ chối hẳn", err)
 	}
 }
 

@@ -30,7 +30,9 @@ var rules = []rule{
 	{id: "QRY-1", op: connector.OpQueryPayment, check: checkQRY1},
 	{id: "QRY-2", op: connector.OpQueryPayment, check: checkQRY2},
 	{id: "QRY-3", op: connector.OpQueryPayment, check: checkQRY3},
+	{id: "CHG-1", op: connector.OpCharge, check: checkCHG1},
 	{id: "CXL-1", op: connector.OpCancel, check: checkCXL1},
+	{id: "CXL-2", op: connector.OpCancel, check: checkCXL2},
 	{id: "WHK-1", op: connector.OpWebhook, check: checkWHK1},
 	{id: "WHK-2", op: connector.OpWebhook, check: checkWHK2},
 	{id: "WHK-3", op: connector.OpWebhook, check: checkWHK3},
@@ -76,10 +78,9 @@ func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]stri
 	if r.op != "" && !e.ops[r.op] {
 		return nil, "connector không khai thao tác " + string(r.op)
 	}
-	var plog *panicLog
 	if viaGRPC {
-		client, pl, err := loopback(tb, c)
-		plog = pl
+		client, srv, err := loopback(tb, c)
+		e.srv = srv
 		if err != nil {
 			if r.id != "ID-1" {
 				return nil, "không dựng được kênh gRPC vì Describe lỗi (xem ID-1/grpc): " + err.Error()
@@ -94,8 +95,12 @@ func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]stri
 			e.fail("luật không chạy xong: %v; connector phải trả về trong hạn và không panic", err)
 		}
 	}
-	if plog != nil {
-		for _, pm := range plog.drain() {
+	e.mu.Lock()
+	skipped := e.skip != ""
+	e.mu.Unlock()
+	// Luật bị bỏ vì bước chuẩn bị hỏng: panic (nếu có) là của bước chuẩn bị, đã thuộc về PAY-1.
+	if e.srv != nil && !skipped {
+		for _, pm := range e.srv.drain() {
 			e.fail("connector panic khi chạy qua gRPC (%s); cần trả lỗi thay vì panic; core nhận lời gọi không rõ kết quả và giao dịch của khách bị kẹt", pm)
 		}
 	}

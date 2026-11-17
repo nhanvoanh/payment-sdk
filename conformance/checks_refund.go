@@ -14,10 +14,13 @@ func (e *env) refundReq(tx, ref, refundCode string) connector.RefundRequest {
 	}
 }
 
-// checkRFD1: cùng luật tiền như Create (PAY-3..5) cho lệnh hoàn tiền.
+// checkRFD1: cùng luật tiền như Create (PAY-3..6) cho lệnh hoàn tiền.
 func checkRFD1(e *env) {
 	tx := e.tx()
-	ref := e.createNormal(tx)
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
 	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
 	rf, _ := e.c.(connector.Refunder)
 	fn := func(code string) func(ctx context.Context) error {
@@ -27,8 +30,9 @@ func checkRFD1(e *env) {
 		}
 	}
 	e.expectUnavailable("CreateRefund", fn("R"+tx+"D"))
-	e.expectHang("CreateRefund", fn("R"+tx+"H"))
+	e.expectUnknown(ModeHang, "CreateRefund", fn("R"+tx+"H"))
 	e.expectRejected("CreateRefund", fn("R"+tx+"J"))
+	e.expectUnknown(ModeGarbage, "CreateRefund", fn("R"+tx+"G"))
 }
 
 // checkRFD2: lệnh hoàn chưa tới được đối tác thì truy vấn phải nói "không thấy", không phải lỗi.

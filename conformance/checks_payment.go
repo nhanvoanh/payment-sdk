@@ -27,18 +27,23 @@ func (e *env) create(ctx context.Context, limit time.Duration, req connector.Cre
 	return res, ok, err
 }
 
-// createNormal là bước chuẩn bị: tạo một giao dịch ở ModeNormal, trả ProviderRef (rỗng nếu không tạo
-// được). Không ghi finding: lỗi của Create đã thuộc về PAY-1, không báo trùng ở luật khác.
-func (e *env) createNormal(tx string) string {
+// createNormal là bước chuẩn bị: tạo một giao dịch ở ModeNormal, trả ProviderRef. Không tạo được thì
+// luật vào Skipped (lỗi của Create thuộc về PAY-1, không báo trùng ở luật khác) và trả ok sai.
+func (e *env) createNormal(tx string) (string, bool) {
 	e.p.SetMode(ModeNormal)
 	ctx, cancel := normalCtx()
 	defer cancel()
 	var res connector.CreatePaymentResult
 	var err error
-	if guard(callLimit+time.Second, func() { res, err = e.c.CreatePayment(ctx, e.createReq(tx)) }) != nil || err != nil {
-		return ""
+	if g := guard(callLimit+time.Second, func() { res, err = e.c.CreatePayment(ctx, e.createReq(tx)) }); g != nil || err != nil {
+		reason := errText(err)
+		if g != nil {
+			reason = g.Error()
+		}
+		e.skipf("bước chuẩn bị CreatePayment ở ModeNormal hỏng (%s), xem PAY-1", reason)
+		return "", false
 	}
-	return res.ProviderRef
+	return res.ProviderRef, true
 }
 
 var validStatuses = map[connector.Status]bool{
@@ -110,51 +115,102 @@ func containsControl(s string) bool {
 	return false
 }
 
-// expectUnavailable: đối tác từ chối kết nối thì lỗi phải khớp ErrProviderUnavailable.
-func (e *env) expectUnavailable(what string, fn func(ctx context.Context) error) {
-	e.p.SetMode(ModeDown)
-	ctx, cancel := normalCtx()
-	defer cancel()
-	var err error
-	if !e.call(what, callLimit+time.Second, func() { err = fn(ctx) }) {
-		return
-	}
-	if !errors.Is(err, connector.ErrProviderUnavailable) {
-		e.fail("%s khi đối tác từ chối kết nối trả %v; cần lỗi khớp ErrProviderUnavailable; core không chốt thất bại được, giao dịch treo chờ truy vấn và khách không tạo lại thanh toán ngay được", what, errText(err))
-	}
-}
+// outcome là cách core hiểu một lỗi của connector.
+type outcome int
 
-// expectHang: đối tác treo, ctx hạn 300 ms: phải trả về kịp, có lỗi, và không được nói chắc là chưa xử lý hay bị từ chối.
-func (e *env) expectHang(what string, fn func(ctx context.Context) error) {
-	e.p.SetMode(ModeHang)
-	ctx, cancel := context.WithTimeout(context.Background(), hangCtx)
-	defer cancel()
-	var err error
-	if !e.call(what+" khi đối tác treo (ctx hạn 300ms)", hangCtx+hangSlack, func() { err = fn(ctx) }) {
-		return
-	}
+const (
+	outcomeOK outcome = iota
+	outcomeUnknown
+	outcomeRejected
+	outcomeUnavailable // core chốt "chắc chắn chưa xử lý"
+)
+
+// coreOutcome phản chiếu paymentsvc.classify của core (SDK không import core, nên chép lại; hai nơi phải
+// khớp): ErrUnknownOutcome xét trước, rồi ErrProviderRejected, rồi ErrProviderUnavailable/ErrNotSupported;
+// lỗi khác là chưa rõ.
+func coreOutcome(err error) outcome {
 	switch {
 	case err == nil:
-		e.fail("%s khi đối tác treo trả err nil; cần lỗi không rõ kết quả (ErrUnknownOutcome); core sẽ coi lời gọi thành công dù không biết đối tác đã xử lý chưa", what)
-	case errors.Is(err, connector.ErrProviderUnavailable):
-		e.fail("%s khi hết hạn chờ đối tác trả %v (khớp ErrProviderUnavailable); cần ErrUnknownOutcome; core sẽ chốt thất bại trong khi đối tác có thể đã trừ tiền, khách trả tiền hai lần", what, err)
+		return outcomeOK
+	case errors.Is(err, connector.ErrUnknownOutcome):
+		return outcomeUnknown
 	case errors.Is(err, connector.ErrProviderRejected):
-		e.fail("%s khi hết hạn chờ đối tác trả %v (khớp ErrProviderRejected); cần ErrUnknownOutcome; core sẽ chốt thất bại trong khi đối tác có thể đã trừ tiền, khách trả tiền hai lần", what, err)
+		return outcomeRejected
+	case errors.Is(err, connector.ErrProviderUnavailable), errors.Is(err, connector.ErrNotSupported):
+		return outcomeUnavailable
+	}
+	return outcomeUnknown
+}
+
+// isUnknownForCore: core giữ giao dịch ở trạng thái chờ truy vấn, không chốt thất bại.
+func isUnknownForCore(err error) bool { return coreOutcome(err) == outcomeUnknown }
+
+func outcomeText(err error) string {
+	switch coreOutcome(err) {
+	case outcomeOK:
+		return "thành công"
+	case outcomeRejected:
+		return "bị từ chối chắc chắn"
+	case outcomeUnavailable:
+		return "chắc chắn chưa xử lý"
+	}
+	return "chưa rõ kết quả"
+}
+
+// modeCall đặt đối tác vào mode m rồi gọi fn. Với ModeHang: gọi thẳng thì ctx hạn 300 ms; qua gRPC thì
+// ctx phía proxy hạn 300 ms + 2 s còn server bọc ctx của handler bằng hạn 300 ms, để connector luôn trả
+// lời (đúng hay sai) trước khi proxy hết hạn và câu trả lời sai luôn tới được proxy.
+func (e *env) modeCall(m Mode, what string, fn func(ctx context.Context) error) (bool, error) {
+	e.p.SetMode(m)
+	ctxLimit, limit := callLimit, callLimit+time.Second
+	if m == ModeHang {
+		what += " khi đối tác treo (ctx hạn 300ms)"
+		ctxLimit, limit = hangCtx, hangCtx+hangSlack
+		if e.srv != nil {
+			ctxLimit, limit = hangCtx+hangSlack, hangCtx+hangSlack+time.Second
+			e.srv.setHandlerDeadline(hangCtx)
+			defer e.srv.setHandlerDeadline(0)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ctxLimit)
+	defer cancel()
+	var err error
+	ok := e.call(what, limit, func() { err = fn(ctx) })
+	return ok, err
+}
+
+// expectUnavailable: đối tác từ chối kết nối thì core phải hiểu là "chắc chắn chưa xử lý".
+func (e *env) expectUnavailable(what string, fn func(ctx context.Context) error) {
+	ok, err := e.modeCall(ModeDown, what, fn)
+	if ok && (!errors.Is(err, connector.ErrProviderUnavailable) || coreOutcome(err) != outcomeUnavailable) {
+		e.fail("%s khi đối tác từ chối kết nối trả %v (core hiểu là %s); cần lỗi khớp ErrProviderUnavailable và không khớp ErrUnknownOutcome hay ErrProviderRejected; core không chốt thất bại được, giao dịch treo chờ truy vấn và khách không tạo lại thanh toán ngay được", what, errText(err), outcomeText(err))
 	}
 }
 
-// expectRejected: đối tác từ chối rõ ràng thì lỗi phải khớp ErrProviderRejected.
+// expectRejected: đối tác từ chối rõ ràng thì core phải hiểu là "bị từ chối".
 func (e *env) expectRejected(what string, fn func(ctx context.Context) error) {
-	e.p.SetMode(ModeReject)
-	ctx, cancel := normalCtx()
-	defer cancel()
-	var err error
-	if !e.call(what, callLimit+time.Second, func() { err = fn(ctx) }) {
+	ok, err := e.modeCall(ModeReject, what, fn)
+	if ok && coreOutcome(err) != outcomeRejected {
+		e.fail("%s khi đối tác từ chối rõ ràng trả %v (core hiểu là %s); cần lỗi khớp ErrProviderRejected (nên dùng RejectedError) và không khớp ErrUnknownOutcome; core không chốt thất bại được, giao dịch treo và khách phải chờ", what, errText(err), outcomeText(err))
+	}
+}
+
+// expectUnknown: đối tác treo (ModeHang) hay trả thân không đọc được (ModeGarbage) thì không ai biết đối
+// tác đã xử lý chưa: lỗi phải là "chưa rõ" theo đúng thứ tự của core.
+func (e *env) expectUnknown(m Mode, what string, fn func(ctx context.Context) error) {
+	ok, err := e.modeCall(m, what, fn)
+	if !ok || isUnknownForCore(err) {
 		return
 	}
-	if !errors.Is(err, connector.ErrProviderRejected) {
-		e.fail("%s khi đối tác từ chối rõ ràng trả %v; cần lỗi khớp ErrProviderRejected (nên dùng RejectedError); core không chốt thất bại được, giao dịch treo và khách phải chờ", what, errText(err))
+	situation := "khi hết hạn chờ đối tác"
+	if m == ModeGarbage {
+		situation = "khi đối tác trả thân không đọc được"
 	}
+	if err == nil {
+		e.fail("%s %s trả err nil; cần lỗi chưa rõ kết quả (ErrUnknownOutcome); core tin một kết quả mà connector không biết", what, situation)
+		return
+	}
+	e.fail("%s %s trả %v (core hiểu là %s); cần ErrUnknownOutcome, không được khớp ErrProviderUnavailable, ErrNotSupported hay ErrProviderRejected; core sẽ chốt thất bại trong khi đối tác có thể đã trừ tiền, khách trả tiền hai lần", what, situation, err, outcomeText(err))
 }
 
 func errText(err error) string {
@@ -172,24 +228,9 @@ func (e *env) createFn(tx string) func(ctx context.Context) error {
 }
 
 func checkPAY3(e *env) { e.expectUnavailable("CreatePayment", e.createFn(e.tx())) }
-func checkPAY4(e *env) { e.expectHang("CreatePayment", e.createFn(e.tx())) }
+func checkPAY4(e *env) { e.expectUnknown(ModeHang, "CreatePayment", e.createFn(e.tx())) }
 func checkPAY5(e *env) { e.expectRejected("CreatePayment", e.createFn(e.tx())) }
-
-func checkPAY6(e *env) {
-	e.p.SetMode(ModeGarbage)
-	ctx, cancel := normalCtx()
-	defer cancel()
-	res, ok, err := e.create(ctx, callLimit+time.Second, e.createReq(e.tx()))
-	if !ok {
-		return
-	}
-	switch {
-	case err == nil:
-		e.fail("CreatePayment khi đối tác trả thân không đọc được trả err nil (Status %q); cần ErrUnknownOutcome; core tin một kết quả mà connector không hiểu", res.Status)
-	case errors.Is(err, connector.ErrProviderUnavailable), errors.Is(err, connector.ErrProviderRejected):
-		e.fail("CreatePayment khi đối tác trả thân không đọc được trả %v; cần ErrUnknownOutcome, không được khớp ErrProviderUnavailable hay ErrProviderRejected; core sẽ chốt thất bại trong khi đối tác có thể đã nhận tiền, khách trả tiền hai lần", err)
-	}
-}
+func checkPAY6(e *env) { e.expectUnknown(ModeGarbage, "CreatePayment", e.createFn(e.tx())) }
 
 // checkPAY7: core gửi lại cùng khoá idempotency khi không rõ kết quả; connector phải chịu được.
 func checkPAY7(e *env) {
@@ -232,7 +273,10 @@ func checkQRY1(e *env) {
 
 func checkQRY2(e *env) {
 	tx := e.tx()
-	ref := e.createNormal(tx)
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
 	e.p.SetMode(ModeNormal)
 	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
 	st, ok, err := e.query(connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref})
@@ -261,8 +305,11 @@ func isCurrency(c string) bool {
 
 func checkQRY3(e *env) {
 	tx := e.tx()
-	ref := e.createNormal(tx)
-	e.expectHang("QueryPayment", func(ctx context.Context) error {
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
+	e.expectUnknown(ModeHang, "QueryPayment", func(ctx context.Context) error {
 		_, err := e.querier().QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref})
 		return err
 	})
@@ -271,7 +318,10 @@ func checkQRY3(e *env) {
 // checkCXL1: huỷ một giao dịch khách đã trả tiền mà báo canceled thì core hoàn đơn trong khi tiền đã bị trừ.
 func checkCXL1(e *env) {
 	tx := e.tx()
-	ref := e.createNormal(tx)
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
 	e.p.SetMode(ModeNormal)
 	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
 	cn, _ := e.c.(connector.Canceler)
@@ -301,9 +351,7 @@ func checkCTX1(e *env) {
 	}{
 		{"", func() { _, _ = e.c.CreatePayment(ctx, e.createReq(tx)) }},
 		{connector.OpCharge, func() {
-			r := e.createReq(tx)
-			_, _ = e.c.(connector.Charger).Charge(ctx, connector.ChargeRequest{TransactionCode: tx, IdempotencyKey: r.IdempotencyKey,
-				Money: r.Money, Method: r.Method, Customer: r.Customer, ReturnURL: r.ReturnURL, CancelURL: r.CancelURL, ClientIP: r.ClientIP})
+			_, _ = e.c.(connector.Charger).Charge(ctx, e.chargeReq(tx))
 		}},
 		{connector.OpQueryPayment, func() {
 			_, _ = e.c.(connector.PaymentQuerier).QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx})
@@ -328,4 +376,56 @@ func checkCTX1(e *env) {
 			e.fail("%s với ctx đã huỷ (đối tác treo): %v; cần trả về trong %v và không panic; core không dừng được lời gọi khi tắt máy hay khi khách bỏ đi, lời gọi treo giữ chân tài nguyên của core", name, err, cancelLimit)
 		}
 	}
+}
+
+// checkCXL2: không biết đối tác đã huỷ chưa thì không được nói "đã huỷ"; báo "chắc chắn" thì core chốt sai.
+func checkCXL2(e *env) {
+	tx := e.tx()
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
+	cn, _ := e.c.(connector.Canceler)
+	for _, m := range []Mode{ModeHang, ModeGarbage} {
+		var res connector.CancelResult
+		ok, err := e.modeCall(m, "CancelPayment", func(ctx context.Context) error {
+			var err error
+			res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx})
+			return err
+		})
+		if !ok {
+			continue
+		}
+		situation := "khi hết hạn chờ đối tác"
+		if m == ModeGarbage {
+			situation = "khi đối tác trả thân không đọc được"
+		}
+		switch {
+		case err == nil && res.Status == connector.StatusCanceled:
+			e.fail("CancelPayment %s trả Status canceled, err nil; cần lỗi chưa rõ kết quả hoặc trạng thái khác canceled; core huỷ đơn trong khi đối tác có thể vẫn thu tiền của khách", situation)
+		case err != nil && !isUnknownForCore(err):
+			e.fail("CancelPayment %s trả %v (core hiểu là %s); cần ErrUnknownOutcome; core tin chắc một kết quả huỷ mà không ai biết, đơn và tiền của khách lệch nhau", situation, err, outcomeText(err))
+		}
+	}
+}
+
+func (e *env) chargeReq(tx string) connector.ChargeRequest {
+	r := e.createReq(tx)
+	return connector.ChargeRequest{TransactionCode: tx, IdempotencyKey: r.IdempotencyKey, Money: r.Money, Method: r.Method,
+		Customer: r.Customer, ReturnURL: r.ReturnURL, CancelURL: r.CancelURL, ClientIP: r.ClientIP}
+}
+
+// checkCHG1: Charge thu tiền trực tiếp nên luật tiền của Create (PAY-3..6) áp nguyên cho nó.
+func checkCHG1(e *env) {
+	ch, _ := e.c.(connector.Charger)
+	fn := func(tx string) func(ctx context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := ch.Charge(ctx, e.chargeReq(tx))
+			return err
+		}
+	}
+	e.expectUnavailable("Charge", fn(e.tx()))
+	e.expectUnknown(ModeHang, "Charge", fn(e.tx()))
+	e.expectRejected("Charge", fn(e.tx()))
+	e.expectUnknown(ModeGarbage, "Charge", fn(e.tx()))
 }

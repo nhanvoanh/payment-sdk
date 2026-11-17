@@ -269,7 +269,7 @@ func TestCheck_Catches_TimeoutReportedAsUnavailable(t *testing.T) {
 		}
 		return f
 	}))
-	expectOnly(t, r, "PAY-4")
+	expectBoth(t, r, "PAY-4")
 }
 
 func TestCheck_Catches_GarbageReportedAsRejected(t *testing.T) {
@@ -347,7 +347,7 @@ func TestCheck_Catches_SameEventIDAcrossTransactions(t *testing.T) {
 
 func TestCheck_Catches_TamperedWebhookAccepted(t *testing.T) {
 	t.Parallel()
-	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+	r := conformance.Check(t, withTamperer(harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
 		f.OnParseWebhook = func(_ context.Context, raw connector.RawWebhook) (connector.ProviderEvent, error) {
 			var b hookBody // không kiểm chữ ký
 			if err := json.Unmarshal(raw.Body, &b); err != nil {
@@ -357,7 +357,7 @@ func TestCheck_Catches_TamperedWebhookAccepted(t *testing.T) {
 				TransactionCode: b.Tx, Status: connector.Status(b.Status)}, nil
 		}
 		return f
-	}))
+	})))
 	expectBoth(t, r, "WHK-4")
 }
 
@@ -396,9 +396,13 @@ func TestCheck_Catches_ImpureAck(t *testing.T) {
 
 func TestCheck_Catches_CancelClaimsCanceledWhenPaid(t *testing.T) {
 	t.Parallel()
-	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
-		f.OnCancel = func(context.Context, connector.CancelRequest) (connector.CancelResult, error) {
-			return connector.CancelResult{Status: connector.StatusCanceled}, nil
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnCancel
+		f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+			if p.currentMode() != conformance.ModeNormal {
+				return good(ctx, req)
+			}
+			return connector.CancelResult{Status: connector.StatusCanceled}, nil // không hỏi đối tác
 		}
 		return f
 	}))
@@ -517,7 +521,7 @@ func TestCheck_Catches_RefundTimeoutAsRejected(t *testing.T) {
 		}
 		return f
 	}))
-	expectOnly(t, r, "RFD-1")
+	expectBoth(t, r, "RFD-1")
 }
 
 func TestCheck_Catches_QueryUnknownAsError(t *testing.T) {
@@ -564,7 +568,7 @@ func TestCheck_SkipsUndeclaredOperations(t *testing.T) {
 	if len(r.Findings) != 0 {
 		t.Fatalf("thao tác không khai không được sinh finding:%s", dump(r))
 	}
-	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "CXL-1",
+	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "CHG-1", "CXL-1", "CXL-2",
 		"WHK-1", "WHK-2", "WHK-3", "WHK-4", "WHK-5", "WHK-6", "RFD-1", "RFD-2"}
 	for _, code := range want {
 		for _, c := range []string{code, code + "/grpc"} {
@@ -673,4 +677,215 @@ func TestCheck_Catches_QueryRefundUnknownAsError(t *testing.T) {
 		return f
 	}))
 	expectBoth(t, r, "RFD-2")
+}
+
+// tamperingPartner cài conformance.Tamperer: đổi trạng thái trong thân đã ký, giữ nguyên chữ ký.
+type tamperingPartner struct{ *fakePartner }
+
+func (p tamperingPartner) TamperedWebhook(raw connector.RawWebhook) connector.RawWebhook {
+	var b hookBody
+	_ = json.Unmarshal(raw.Body, &b)
+	b.Status = string(connector.StatusFailed)
+	raw.Body, _ = json.Marshal(b)
+	return raw
+}
+
+func withTamperer(h conformance.Harness) conformance.Harness {
+	inner := h.New
+	h.New = func(tb testing.TB) (connector.Connector, conformance.Partner) {
+		c, p := inner(tb)
+		return c, tamperingPartner{p.(*fakePartner)}
+	}
+	return h
+}
+
+// createInMode dựng wrapper cho Create: ở mode m thì (nếu treo thì chờ như connector thật) trả err.
+func createInMode(m conformance.Mode, err error) func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+	return func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnCreate
+		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			if p.currentMode() == m {
+				if m == conformance.ModeHang {
+					p.hang(ctx)
+				}
+				return connector.CreatePaymentResult{}, err
+			}
+			return good(ctx, req)
+		}
+		return f
+	}
+}
+
+var errUnknownAndUnavailable = fmt.Errorf("%w; %w", connector.ErrUnknownOutcome, connector.ErrProviderUnavailable)
+
+func TestCheck_Catches_TimeoutReportedAsNotSupported(t *testing.T) {
+	t.Parallel()
+	expectBoth(t, conformance.Check(t, harness(createInMode(conformance.ModeHang, connector.ErrNotSupported))), "PAY-4")
+}
+
+func TestCheck_Catches_GarbageReportedAsNotSupported(t *testing.T) {
+	t.Parallel()
+	expectBoth(t, conformance.Check(t, harness(createInMode(conformance.ModeGarbage, connector.ErrNotSupported))), "PAY-6")
+}
+
+func TestCheck_Catches_DownWrappedWithUnknown(t *testing.T) {
+	t.Parallel()
+	expectBoth(t, conformance.Check(t, harness(createInMode(conformance.ModeDown, errUnknownAndUnavailable))), "PAY-3")
+}
+
+func TestCheck_Catches_RejectWrappedWithUnknown(t *testing.T) {
+	t.Parallel()
+	rej := fmt.Errorf("%w: %w", connector.ErrUnknownOutcome, &connector.RejectedError{Code: "R01"})
+	expectBoth(t, conformance.Check(t, harness(createInMode(conformance.ModeReject, rej))), "PAY-5")
+}
+
+func TestCheck_Catches_HangWrappedWithUnknownIsFine(t *testing.T) {
+	t.Parallel()
+	// Lỗi bọc cả ErrUnknownOutcome lẫn ErrProviderUnavailable: core xét ErrUnknownOutcome trước nên là chưa rõ, đạt.
+	r := conformance.Check(t, harness(createInMode(conformance.ModeHang, errUnknownAndUnavailable)))
+	if len(r.Findings) != 0 {
+		t.Fatalf("không được có finding:%s", dump(r))
+	}
+}
+
+func TestCheck_Catches_ChargeTimeoutAsUnavailable(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnCharge
+		f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			if p.currentMode() == conformance.ModeHang {
+				p.hang(ctx)
+				return connector.ChargeResult{}, connector.ErrProviderUnavailable
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	expectBoth(t, r, "CHG-1")
+}
+
+func TestCheck_Catches_ChargeGarbageAsRejected(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnCharge
+		f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			if p.currentMode() == conformance.ModeGarbage {
+				return connector.ChargeResult{}, &connector.RejectedError{Code: "PARSE"}
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	expectBoth(t, r, "CHG-1")
+}
+
+func TestCheck_Catches_RefundGarbageAsUnavailable(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnRefund
+		f.OnRefund = func(ctx context.Context, req connector.RefundRequest) (connector.RefundResult, error) {
+			if p.currentMode() == conformance.ModeGarbage {
+				return connector.RefundResult{}, connector.ErrProviderUnavailable
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	expectBoth(t, r, "RFD-1")
+}
+
+func TestCheck_Catches_CancelTimeoutClaimsCanceled(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnCancel
+		f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+			if p.currentMode() == conformance.ModeHang {
+				p.hang(ctx)
+				return connector.CancelResult{Status: connector.StatusCanceled}, nil
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	expectBoth(t, r, "CXL-2")
+}
+
+func TestCheck_Catches_CancelGarbageAsNotSupported(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnCancel
+		f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+			if p.currentMode() == conformance.ModeGarbage {
+				return connector.CancelResult{}, connector.ErrNotSupported
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	expectBoth(t, r, "CXL-2")
+}
+
+// parseFirst phân tích JSON trước rồi mới kiểm chữ ký, và báo chữ ký sai bằng lỗi thường.
+func parseFirst(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+	good := f.OnParseWebhook
+	f.OnParseWebhook = func(ctx context.Context, raw connector.RawWebhook) (connector.ProviderEvent, error) {
+		var b hookBody
+		if err := json.Unmarshal(raw.Body, &b); err != nil {
+			return connector.ProviderEvent{}, fmt.Errorf("acme: malformed body: %w", err)
+		}
+		ev, err := good(ctx, raw)
+		if errors.Is(err, connector.ErrInvalidSignature) {
+			return connector.ProviderEvent{}, errors.New("acme: bad signature")
+		}
+		return ev, err
+	}
+	return f
+}
+
+func TestCheck_WHK4_ErrorWithoutTampererIsNotViolation(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(parseFirst))
+	if len(r.Findings) != 0 {
+		t.Fatalf("lỗi khác ErrInvalidSignature khi không có Tamperer không phải vi phạm:%s", dump(r))
+	}
+}
+
+func TestCheck_Catches_TamperedNotInvalidSignatureWithTamperer(t *testing.T) {
+	t.Parallel()
+	expectBoth(t, conformance.Check(t, withTamperer(harness(parseFirst))), "WHK-4")
+}
+
+func TestCheck_GoodFakeWithTampererPassesEverything(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, withTamperer(harness(nil)))
+	if len(r.Findings) != 0 || len(r.Skipped) != 0 {
+		t.Fatalf("connector tốt phải qua hết: skipped=%v findings:%s", r.Skipped, dump(r))
+	}
+}
+
+func TestCheck_Catches_WebhookWrongKind(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnParseWebhook
+		f.OnParseWebhook = func(ctx context.Context, raw connector.RawWebhook) (connector.ProviderEvent, error) {
+			ev, err := good(ctx, raw)
+			ev.Kind = connector.EventKindRefund
+			return ev, err
+		}
+		return f
+	}))
+	expectBoth(t, r, "WHK-1")
+}
+
+func TestCheck_SetupFailureIsSkippedNotFinding(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(createInMode(conformance.ModeNormal, errors.New("acme: internal error"))))
+	expectBoth(t, r, "PAY-1")
+	for _, code := range []string{"QRY-2", "QRY-3", "CXL-1", "CXL-2", "RFD-1"} {
+		for _, c := range []string{code, code + "/grpc"} {
+			if !slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, c+": ") && strings.Contains(s, "PAY-1") }) {
+				t.Errorf("%s phải vào Skipped với lý do trỏ tới PAY-1: %v", c, r.Skipped)
+			}
+		}
+	}
 }
