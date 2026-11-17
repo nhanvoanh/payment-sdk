@@ -524,27 +524,31 @@ func (x *RawExchange) GetDurationMs() int64 {
 	return 0
 }
 
-type StringList struct {
+// ByteEntry là một khoá header/query cùng các giá trị của nó, theo thứ tự nhận được.
+// Dùng bytes (không phải string/map) để byte không phải UTF-8 đi nguyên vẹn: connector ở xa
+// tính chữ ký trên đúng byte đối tác gửi, thay đổi một byte là từ chối nhầm thông báo hợp lệ.
+type ByteEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Values        []string               `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	Name          []byte                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Values        [][]byte               `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *StringList) Reset() {
-	*x = StringList{}
+func (x *ByteEntry) Reset() {
+	*x = ByteEntry{}
 	mi := &file_hasaki_payment_connector_v1_connector_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *StringList) String() string {
+func (x *ByteEntry) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*StringList) ProtoMessage() {}
+func (*ByteEntry) ProtoMessage() {}
 
-func (x *StringList) ProtoReflect() protoreflect.Message {
+func (x *ByteEntry) ProtoReflect() protoreflect.Message {
 	mi := &file_hasaki_payment_connector_v1_connector_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -556,12 +560,19 @@ func (x *StringList) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use StringList.ProtoReflect.Descriptor instead.
-func (*StringList) Descriptor() ([]byte, []int) {
+// Deprecated: Use ByteEntry.ProtoReflect.Descriptor instead.
+func (*ByteEntry) Descriptor() ([]byte, []int) {
 	return file_hasaki_payment_connector_v1_connector_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *StringList) GetValues() []string {
+func (x *ByteEntry) GetName() []byte {
+	if x != nil {
+		return x.Name
+	}
+	return nil
+}
+
+func (x *ByteEntry) GetValues() [][]byte {
 	if x != nil {
 		return x.Values
 	}
@@ -570,8 +581,8 @@ func (x *StringList) GetValues() []string {
 
 type RawWebhook struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Headers       map[string]*StringList `protobuf:"bytes,1,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Query         map[string]*StringList `protobuf:"bytes,2,rep,name=query,proto3" json:"query,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Headers       []*ByteEntry           `protobuf:"bytes,1,rep,name=headers,proto3" json:"headers,omitempty"`
+	Query         []*ByteEntry           `protobuf:"bytes,2,rep,name=query,proto3" json:"query,omitempty"`
 	Body          []byte                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`
 	RemoteIp      string                 `protobuf:"bytes,4,opt,name=remote_ip,json=remoteIp,proto3" json:"remote_ip,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -608,14 +619,14 @@ func (*RawWebhook) Descriptor() ([]byte, []int) {
 	return file_hasaki_payment_connector_v1_connector_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *RawWebhook) GetHeaders() map[string]*StringList {
+func (x *RawWebhook) GetHeaders() []*ByteEntry {
 	if x != nil {
 		return x.Headers
 	}
 	return nil
 }
 
-func (x *RawWebhook) GetQuery() map[string]*StringList {
+func (x *RawWebhook) GetQuery() []*ByteEntry {
 	if x != nil {
 		return x.Query
 	}
@@ -2182,23 +2193,16 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\vhttp_status\x18\x03 \x01(\x05R\n" +
 	"httpStatus\x12\x1f\n" +
 	"\vduration_ms\x18\x04 \x01(\x03R\n" +
-	"durationMs\"$\n" +
+	"durationMs\"7\n" +
+	"\tByteEntry\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\fR\x04name\x12\x16\n" +
+	"\x06values\x18\x02 \x03(\fR\x06values\"\xbd\x01\n" +
 	"\n" +
-	"StringList\x12\x16\n" +
-	"\x06values\x18\x01 \x03(\tR\x06values\"\x9f\x03\n" +
-	"\n" +
-	"RawWebhook\x12N\n" +
-	"\aheaders\x18\x01 \x03(\v24.hasaki.payment.connector.v1.RawWebhook.HeadersEntryR\aheaders\x12H\n" +
-	"\x05query\x18\x02 \x03(\v22.hasaki.payment.connector.v1.RawWebhook.QueryEntryR\x05query\x12\x12\n" +
+	"RawWebhook\x12@\n" +
+	"\aheaders\x18\x01 \x03(\v2&.hasaki.payment.connector.v1.ByteEntryR\aheaders\x12<\n" +
+	"\x05query\x18\x02 \x03(\v2&.hasaki.payment.connector.v1.ByteEntryR\x05query\x12\x12\n" +
 	"\x04body\x18\x03 \x01(\fR\x04body\x12\x1b\n" +
-	"\tremote_ip\x18\x04 \x01(\tR\bremoteIp\x1ac\n" +
-	"\fHeadersEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12=\n" +
-	"\x05value\x18\x02 \x01(\v2'.hasaki.payment.connector.v1.StringListR\x05value:\x028\x01\x1aa\n" +
-	"\n" +
-	"QueryEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12=\n" +
-	"\x05value\x18\x02 \x01(\v2'.hasaki.payment.connector.v1.StringListR\x05value:\x028\x01\"[\n" +
+	"\tremote_ip\x18\x04 \x01(\tR\bremoteIp\"[\n" +
 	"\n" +
 	"WebhookAck\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\x05R\x06status\x12\x12\n" +
@@ -2384,7 +2388,7 @@ func file_hasaki_payment_connector_v1_connector_proto_rawDescGZIP() []byte {
 }
 
 var file_hasaki_payment_connector_v1_connector_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_hasaki_payment_connector_v1_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_hasaki_payment_connector_v1_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_hasaki_payment_connector_v1_connector_proto_goTypes = []any{
 	(Status)(0),                   // 0: hasaki.payment.connector.v1.Status
 	(ErrorKind)(0),                // 1: hasaki.payment.connector.v1.ErrorKind
@@ -2394,7 +2398,7 @@ var file_hasaki_payment_connector_v1_connector_proto_goTypes = []any{
 	(*CardMasked)(nil),            // 5: hasaki.payment.connector.v1.CardMasked
 	(*NextAction)(nil),            // 6: hasaki.payment.connector.v1.NextAction
 	(*RawExchange)(nil),           // 7: hasaki.payment.connector.v1.RawExchange
-	(*StringList)(nil),            // 8: hasaki.payment.connector.v1.StringList
+	(*ByteEntry)(nil),             // 8: hasaki.payment.connector.v1.ByteEntry
 	(*RawWebhook)(nil),            // 9: hasaki.payment.connector.v1.RawWebhook
 	(*WebhookAck)(nil),            // 10: hasaki.payment.connector.v1.WebhookAck
 	(*DescribeRequest)(nil),       // 11: hasaki.payment.connector.v1.DescribeRequest
@@ -2417,41 +2421,39 @@ var file_hasaki_payment_connector_v1_connector_proto_goTypes = []any{
 	(*ParseRedirectRequest)(nil),  // 28: hasaki.payment.connector.v1.ParseRedirectRequest
 	(*ParseRedirectResponse)(nil), // 29: hasaki.payment.connector.v1.ParseRedirectResponse
 	nil,                           // 30: hasaki.payment.connector.v1.NextAction.FormFieldsEntry
-	nil,                           // 31: hasaki.payment.connector.v1.RawWebhook.HeadersEntry
-	nil,                           // 32: hasaki.payment.connector.v1.RawWebhook.QueryEntry
-	nil,                           // 33: hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry
-	nil,                           // 34: hasaki.payment.connector.v1.CreatePaymentRequest.MetadataEntry
-	nil,                           // 35: hasaki.payment.connector.v1.ChargeRequest.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 36: google.protobuf.Timestamp
+	nil,                           // 31: hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry
+	nil,                           // 32: hasaki.payment.connector.v1.CreatePaymentRequest.MetadataEntry
+	nil,                           // 33: hasaki.payment.connector.v1.ChargeRequest.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 34: google.protobuf.Timestamp
 }
 var file_hasaki_payment_connector_v1_connector_proto_depIdxs = []int32{
 	1,  // 0: hasaki.payment.connector.v1.ConnectorError.kind:type_name -> hasaki.payment.connector.v1.ErrorKind
 	30, // 1: hasaki.payment.connector.v1.NextAction.form_fields:type_name -> hasaki.payment.connector.v1.NextAction.FormFieldsEntry
-	31, // 2: hasaki.payment.connector.v1.RawWebhook.headers:type_name -> hasaki.payment.connector.v1.RawWebhook.HeadersEntry
-	32, // 3: hasaki.payment.connector.v1.RawWebhook.query:type_name -> hasaki.payment.connector.v1.RawWebhook.QueryEntry
-	33, // 4: hasaki.payment.connector.v1.DescribeResponse.webhook_acks:type_name -> hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry
+	8,  // 2: hasaki.payment.connector.v1.RawWebhook.headers:type_name -> hasaki.payment.connector.v1.ByteEntry
+	8,  // 3: hasaki.payment.connector.v1.RawWebhook.query:type_name -> hasaki.payment.connector.v1.ByteEntry
+	31, // 4: hasaki.payment.connector.v1.DescribeResponse.webhook_acks:type_name -> hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry
 	3,  // 5: hasaki.payment.connector.v1.CreatePaymentRequest.money:type_name -> hasaki.payment.connector.v1.Money
 	4,  // 6: hasaki.payment.connector.v1.CreatePaymentRequest.customer:type_name -> hasaki.payment.connector.v1.Customer
-	34, // 7: hasaki.payment.connector.v1.CreatePaymentRequest.metadata:type_name -> hasaki.payment.connector.v1.CreatePaymentRequest.MetadataEntry
+	32, // 7: hasaki.payment.connector.v1.CreatePaymentRequest.metadata:type_name -> hasaki.payment.connector.v1.CreatePaymentRequest.MetadataEntry
 	2,  // 8: hasaki.payment.connector.v1.CreatePaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
 	7,  // 9: hasaki.payment.connector.v1.CreatePaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
 	0,  // 10: hasaki.payment.connector.v1.CreatePaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
 	6,  // 11: hasaki.payment.connector.v1.CreatePaymentResponse.next_action:type_name -> hasaki.payment.connector.v1.NextAction
-	36, // 12: hasaki.payment.connector.v1.CreatePaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
+	34, // 12: hasaki.payment.connector.v1.CreatePaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
 	3,  // 13: hasaki.payment.connector.v1.ChargeRequest.money:type_name -> hasaki.payment.connector.v1.Money
 	4,  // 14: hasaki.payment.connector.v1.ChargeRequest.customer:type_name -> hasaki.payment.connector.v1.Customer
-	35, // 15: hasaki.payment.connector.v1.ChargeRequest.metadata:type_name -> hasaki.payment.connector.v1.ChargeRequest.MetadataEntry
+	33, // 15: hasaki.payment.connector.v1.ChargeRequest.metadata:type_name -> hasaki.payment.connector.v1.ChargeRequest.MetadataEntry
 	2,  // 16: hasaki.payment.connector.v1.ChargeResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
 	7,  // 17: hasaki.payment.connector.v1.ChargeResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
 	0,  // 18: hasaki.payment.connector.v1.ChargeResponse.status:type_name -> hasaki.payment.connector.v1.Status
 	3,  // 19: hasaki.payment.connector.v1.ChargeResponse.amount_paid:type_name -> hasaki.payment.connector.v1.Money
-	36, // 20: hasaki.payment.connector.v1.ChargeResponse.paid_at:type_name -> google.protobuf.Timestamp
+	34, // 20: hasaki.payment.connector.v1.ChargeResponse.paid_at:type_name -> google.protobuf.Timestamp
 	6,  // 21: hasaki.payment.connector.v1.ChargeResponse.next_action:type_name -> hasaki.payment.connector.v1.NextAction
 	2,  // 22: hasaki.payment.connector.v1.QueryPaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
 	7,  // 23: hasaki.payment.connector.v1.QueryPaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
 	0,  // 24: hasaki.payment.connector.v1.QueryPaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
 	3,  // 25: hasaki.payment.connector.v1.QueryPaymentResponse.amount_paid:type_name -> hasaki.payment.connector.v1.Money
-	36, // 26: hasaki.payment.connector.v1.QueryPaymentResponse.paid_at:type_name -> google.protobuf.Timestamp
+	34, // 26: hasaki.payment.connector.v1.QueryPaymentResponse.paid_at:type_name -> google.protobuf.Timestamp
 	5,  // 27: hasaki.payment.connector.v1.QueryPaymentResponse.card:type_name -> hasaki.payment.connector.v1.CardMasked
 	2,  // 28: hasaki.payment.connector.v1.CancelPaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
 	7,  // 29: hasaki.payment.connector.v1.CancelPaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
@@ -2465,7 +2467,7 @@ var file_hasaki_payment_connector_v1_connector_proto_depIdxs = []int32{
 	0,  // 37: hasaki.payment.connector.v1.QueryRefundResponse.status:type_name -> hasaki.payment.connector.v1.Status
 	0,  // 38: hasaki.payment.connector.v1.ProviderEvent.status:type_name -> hasaki.payment.connector.v1.Status
 	3,  // 39: hasaki.payment.connector.v1.ProviderEvent.amount_paid:type_name -> hasaki.payment.connector.v1.Money
-	36, // 40: hasaki.payment.connector.v1.ProviderEvent.paid_at:type_name -> google.protobuf.Timestamp
+	34, // 40: hasaki.payment.connector.v1.ProviderEvent.paid_at:type_name -> google.protobuf.Timestamp
 	5,  // 41: hasaki.payment.connector.v1.ProviderEvent.card:type_name -> hasaki.payment.connector.v1.CardMasked
 	9,  // 42: hasaki.payment.connector.v1.ParseWebhookRequest.raw:type_name -> hasaki.payment.connector.v1.RawWebhook
 	2,  // 43: hasaki.payment.connector.v1.ParseWebhookResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
@@ -2475,32 +2477,30 @@ var file_hasaki_payment_connector_v1_connector_proto_depIdxs = []int32{
 	2,  // 47: hasaki.payment.connector.v1.ParseRedirectResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
 	7,  // 48: hasaki.payment.connector.v1.ParseRedirectResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
 	25, // 49: hasaki.payment.connector.v1.ParseRedirectResponse.event:type_name -> hasaki.payment.connector.v1.ProviderEvent
-	8,  // 50: hasaki.payment.connector.v1.RawWebhook.HeadersEntry.value:type_name -> hasaki.payment.connector.v1.StringList
-	8,  // 51: hasaki.payment.connector.v1.RawWebhook.QueryEntry.value:type_name -> hasaki.payment.connector.v1.StringList
-	10, // 52: hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry.value:type_name -> hasaki.payment.connector.v1.WebhookAck
-	11, // 53: hasaki.payment.connector.v1.ConnectorService.Describe:input_type -> hasaki.payment.connector.v1.DescribeRequest
-	13, // 54: hasaki.payment.connector.v1.ConnectorService.CreatePayment:input_type -> hasaki.payment.connector.v1.CreatePaymentRequest
-	15, // 55: hasaki.payment.connector.v1.ConnectorService.Charge:input_type -> hasaki.payment.connector.v1.ChargeRequest
-	17, // 56: hasaki.payment.connector.v1.ConnectorService.QueryPayment:input_type -> hasaki.payment.connector.v1.QueryPaymentRequest
-	19, // 57: hasaki.payment.connector.v1.ConnectorService.CancelPayment:input_type -> hasaki.payment.connector.v1.CancelPaymentRequest
-	21, // 58: hasaki.payment.connector.v1.ConnectorService.CreateRefund:input_type -> hasaki.payment.connector.v1.CreateRefundRequest
-	23, // 59: hasaki.payment.connector.v1.ConnectorService.QueryRefund:input_type -> hasaki.payment.connector.v1.QueryRefundRequest
-	26, // 60: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:input_type -> hasaki.payment.connector.v1.ParseWebhookRequest
-	28, // 61: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:input_type -> hasaki.payment.connector.v1.ParseRedirectRequest
-	12, // 62: hasaki.payment.connector.v1.ConnectorService.Describe:output_type -> hasaki.payment.connector.v1.DescribeResponse
-	14, // 63: hasaki.payment.connector.v1.ConnectorService.CreatePayment:output_type -> hasaki.payment.connector.v1.CreatePaymentResponse
-	16, // 64: hasaki.payment.connector.v1.ConnectorService.Charge:output_type -> hasaki.payment.connector.v1.ChargeResponse
-	18, // 65: hasaki.payment.connector.v1.ConnectorService.QueryPayment:output_type -> hasaki.payment.connector.v1.QueryPaymentResponse
-	20, // 66: hasaki.payment.connector.v1.ConnectorService.CancelPayment:output_type -> hasaki.payment.connector.v1.CancelPaymentResponse
-	22, // 67: hasaki.payment.connector.v1.ConnectorService.CreateRefund:output_type -> hasaki.payment.connector.v1.CreateRefundResponse
-	24, // 68: hasaki.payment.connector.v1.ConnectorService.QueryRefund:output_type -> hasaki.payment.connector.v1.QueryRefundResponse
-	27, // 69: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:output_type -> hasaki.payment.connector.v1.ParseWebhookResponse
-	29, // 70: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:output_type -> hasaki.payment.connector.v1.ParseRedirectResponse
-	62, // [62:71] is the sub-list for method output_type
-	53, // [53:62] is the sub-list for method input_type
-	53, // [53:53] is the sub-list for extension type_name
-	53, // [53:53] is the sub-list for extension extendee
-	0,  // [0:53] is the sub-list for field type_name
+	10, // 50: hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry.value:type_name -> hasaki.payment.connector.v1.WebhookAck
+	11, // 51: hasaki.payment.connector.v1.ConnectorService.Describe:input_type -> hasaki.payment.connector.v1.DescribeRequest
+	13, // 52: hasaki.payment.connector.v1.ConnectorService.CreatePayment:input_type -> hasaki.payment.connector.v1.CreatePaymentRequest
+	15, // 53: hasaki.payment.connector.v1.ConnectorService.Charge:input_type -> hasaki.payment.connector.v1.ChargeRequest
+	17, // 54: hasaki.payment.connector.v1.ConnectorService.QueryPayment:input_type -> hasaki.payment.connector.v1.QueryPaymentRequest
+	19, // 55: hasaki.payment.connector.v1.ConnectorService.CancelPayment:input_type -> hasaki.payment.connector.v1.CancelPaymentRequest
+	21, // 56: hasaki.payment.connector.v1.ConnectorService.CreateRefund:input_type -> hasaki.payment.connector.v1.CreateRefundRequest
+	23, // 57: hasaki.payment.connector.v1.ConnectorService.QueryRefund:input_type -> hasaki.payment.connector.v1.QueryRefundRequest
+	26, // 58: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:input_type -> hasaki.payment.connector.v1.ParseWebhookRequest
+	28, // 59: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:input_type -> hasaki.payment.connector.v1.ParseRedirectRequest
+	12, // 60: hasaki.payment.connector.v1.ConnectorService.Describe:output_type -> hasaki.payment.connector.v1.DescribeResponse
+	14, // 61: hasaki.payment.connector.v1.ConnectorService.CreatePayment:output_type -> hasaki.payment.connector.v1.CreatePaymentResponse
+	16, // 62: hasaki.payment.connector.v1.ConnectorService.Charge:output_type -> hasaki.payment.connector.v1.ChargeResponse
+	18, // 63: hasaki.payment.connector.v1.ConnectorService.QueryPayment:output_type -> hasaki.payment.connector.v1.QueryPaymentResponse
+	20, // 64: hasaki.payment.connector.v1.ConnectorService.CancelPayment:output_type -> hasaki.payment.connector.v1.CancelPaymentResponse
+	22, // 65: hasaki.payment.connector.v1.ConnectorService.CreateRefund:output_type -> hasaki.payment.connector.v1.CreateRefundResponse
+	24, // 66: hasaki.payment.connector.v1.ConnectorService.QueryRefund:output_type -> hasaki.payment.connector.v1.QueryRefundResponse
+	27, // 67: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:output_type -> hasaki.payment.connector.v1.ParseWebhookResponse
+	29, // 68: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:output_type -> hasaki.payment.connector.v1.ParseRedirectResponse
+	60, // [60:69] is the sub-list for method output_type
+	51, // [51:60] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_hasaki_payment_connector_v1_connector_proto_init() }
@@ -2514,7 +2514,7 @@ func file_hasaki_payment_connector_v1_connector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hasaki_payment_connector_v1_connector_proto_rawDesc), len(file_hasaki_payment_connector_v1_connector_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   34,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

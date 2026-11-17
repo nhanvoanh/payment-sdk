@@ -6,9 +6,11 @@
 package connectorrpc
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -89,12 +91,16 @@ func mapFromProto(m map[string]string) map[string]string {
 	return out
 }
 
-// TimeToProto: thời gian zero ↔ không đặt (nil).
+// TimeToProto: thời gian zero hoặc ngoài khoảng protobuf chấp nhận (năm 1..9999) ↔ không đặt (nil).
 func TimeToProto(t time.Time) *timestamppb.Timestamp {
 	if t.IsZero() {
 		return nil
 	}
-	return timestamppb.New(t)
+	ts := timestamppb.New(t)
+	if ts.CheckValid() != nil {
+		return nil // ngoài khoảng protobuf chấp nhận: coi là không đặt thay vì làm hỏng cả phản hồi
+	}
+	return ts
 }
 
 func TimeFromProto(t *timestamppb.Timestamp) time.Time {
@@ -197,35 +203,45 @@ func RawExchangeFromProto(r *connectorpb.RawExchange) connector.RawExchange {
 	}
 }
 
-func listsToProto(m map[string][]string) map[string]*connectorpb.StringList {
+// entriesToProto giữ nguyên byte của khoá và giá trị (không qua valid) và sắp theo khoá để đầu ra ổn định.
+func entriesToProto(m map[string][]string) []*connectorpb.ByteEntry {
 	if len(m) == 0 {
 		return nil
 	}
-	out := make(map[string]*connectorpb.StringList, len(m))
+	out := make([]*connectorpb.ByteEntry, 0, len(m))
 	for k, vs := range m {
-		l := &connectorpb.StringList{Values: make([]string, len(vs))}
+		e := &connectorpb.ByteEntry{Name: []byte(k), Values: make([][]byte, len(vs))}
 		for i, v := range vs {
-			l.Values[i] = valid(v)
+			e.Values[i] = []byte(v)
 		}
-		out[valid(k)] = l
+		out = append(out, e)
 	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Name, out[j].Name) < 0 })
 	return out
 }
 
-func listsFromProto(m map[string]*connectorpb.StringList) map[string][]string {
-	if len(m) == 0 {
+// entriesFromProto gộp các mục trùng khoá theo thứ tự xuất hiện.
+func entriesFromProto(es []*connectorpb.ByteEntry) map[string][]string {
+	if len(es) == 0 {
 		return nil
 	}
-	out := make(map[string][]string, len(m))
-	for k, l := range m {
-		out[k] = append([]string(nil), l.GetValues()...)
+	out := make(map[string][]string, len(es))
+	for _, e := range es {
+		vs := out[string(e.GetName())]
+		if vs == nil {
+			vs = make([]string, 0, len(e.GetValues()))
+		}
+		for _, v := range e.GetValues() {
+			vs = append(vs, string(v))
+		}
+		out[string(e.GetName())] = vs
 	}
 	return out
 }
 
 func RawWebhookToProto(r connector.RawWebhook) *connectorpb.RawWebhook {
 	return &connectorpb.RawWebhook{
-		Headers: listsToProto(r.Headers), Query: listsToProto(r.Query), Body: r.Body, RemoteIp: valid(r.RemoteIP),
+		Headers: entriesToProto(r.Headers), Query: entriesToProto(r.Query), Body: r.Body, RemoteIp: valid(r.RemoteIP),
 	}
 }
 
@@ -233,7 +249,7 @@ func RawWebhookFromProto(r *connectorpb.RawWebhook) connector.RawWebhook {
 	if r == nil {
 		return connector.RawWebhook{}
 	}
-	out := connector.RawWebhook{Headers: listsFromProto(r.Headers), Query: listsFromProto(r.Query), RemoteIP: r.RemoteIp}
+	out := connector.RawWebhook{Headers: entriesFromProto(r.Headers), Query: entriesFromProto(r.Query), RemoteIP: r.RemoteIp}
 	if len(r.Body) > 0 {
 		out.Body = r.Body
 	}
@@ -486,6 +502,29 @@ func ProviderEventToProto(e connector.ProviderEvent) *connectorpb.ProviderEvent 
 		Card: CardToProto(e.Card), ProviderCode: valid(e.ProviderCode), ProviderMessage: valid(e.ProviderMessage),
 		Raw: e.Raw,
 	}
+}
+
+// ParseWebhookResultFromProto: response nil, rồi Error (giữ nguyên loại lỗi, ví dụ chữ ký sai), rồi event nil,
+// rồi status không hiểu được.
+func ParseWebhookResultFromProto(p *connectorpb.ParseWebhookResponse) (connector.ProviderEvent, error) {
+	if p == nil {
+		return connector.ProviderEvent{}, errNilResponse
+	}
+	if err := ErrorFromProto(p.GetError()); err != nil {
+		return connector.ProviderEvent{}, err
+	}
+	return ProviderEventFromProto(p.GetEvent())
+}
+
+// ParseRedirectResultFromProto: cùng thứ tự với ParseWebhookResultFromProto.
+func ParseRedirectResultFromProto(p *connectorpb.ParseRedirectResponse) (connector.ProviderEvent, error) {
+	if p == nil {
+		return connector.ProviderEvent{}, errNilResponse
+	}
+	if err := ErrorFromProto(p.GetError()); err != nil {
+		return connector.ProviderEvent{}, err
+	}
+	return ProviderEventFromProto(p.GetEvent())
 }
 
 // ProviderEventFromProto: event nil hoặc status không hiểu được là lỗi bọc ErrUnknownOutcome.

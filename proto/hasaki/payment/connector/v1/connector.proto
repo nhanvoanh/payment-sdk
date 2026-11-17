@@ -81,13 +81,17 @@ message RawExchange {
   int64 duration_ms = 4;
 }
 
-message StringList {
-  repeated string values = 1;
+// ByteEntry là một khoá header/query cùng các giá trị của nó, theo thứ tự nhận được.
+// Dùng bytes (không phải string/map) để byte không phải UTF-8 đi nguyên vẹn: connector ở xa
+// tính chữ ký trên đúng byte đối tác gửi, thay đổi một byte là từ chối nhầm thông báo hợp lệ.
+message ByteEntry {
+  bytes name = 1;
+  repeated bytes values = 2;
 }
 
 message RawWebhook {
-  map<string, StringList> headers = 1;
-  map<string, StringList> query = 2;
+  repeated ByteEntry headers = 1;
+  repeated ByteEntry query = 2;
   bytes body = 3;
   string remote_ip = 4;
 }

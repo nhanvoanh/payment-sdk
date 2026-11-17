@@ -214,14 +214,84 @@ func TestProviderEvent_RoundTrip(t *testing.T) {
 
 func TestRawWebhook_RoundTrip(t *testing.T) {
 	in := connector.RawWebhook{
-		Headers:  map[string][]string{"X-Sig": {"a", "b"}, "Tên": {"giá trị"}},
-		Query:    map[string][]string{"q": {"1", "2", "3"}},
+		Headers: map[string][]string{
+			"X-Sig":   {"a", "b", "a"},
+			"Tên":     {"giá trị"},
+			"":        {""},
+			"k\xff1":  {"v\xff", "\x00", ""},
+			"k\xfe1":  {"khác"}, // chỉ khác khoá trên ở một byte hỏng
+			"nul\x00": {"z"},
+			"rỗng":    {},
+		},
+		Query:    map[string][]string{"q": {"1", "2", "3"}, "\xff": {"\xff\xff"}},
 		Body:     []byte{0, 1, 2, 0xff},
 		RemoteIP: "10.0.0.1",
 	}
-	assert.Equal(t, in, connectorrpc.RawWebhookFromProto(wire(t, connectorrpc.RawWebhookToProto(in))))
+	got := connectorrpc.RawWebhookFromProto(wire(t, connectorrpc.RawWebhookToProto(in)))
+	assert.Equal(t, in, got) // so từng byte và thứ tự giá trị trong khoá
+	assert.Len(t, got.Headers, len(in.Headers), "khoá khác nhau không bị gộp")
+	assert.Equal(t, []string{"v\xff", "\x00", ""}, got.Headers["k\xff1"])
+	assert.Equal(t, []string{"khác"}, got.Headers["k\xfe1"])
+	assert.Equal(t, []string{"a", "b", "a"}, got.Headers["X-Sig"])
 	assert.Equal(t, connector.RawWebhook{}, connectorrpc.RawWebhookFromProto(wire(t, connectorrpc.RawWebhookToProto(connector.RawWebhook{}))))
 	assert.Equal(t, connector.RawWebhook{}, connectorrpc.RawWebhookFromProto(nil))
+}
+
+func TestParseResultFromProto(t *testing.T) {
+	ok := &connectorpb.ProviderEvent{EventId: "e", Kind: "payment", Status: connectorpb.Status_STATUS_SUCCEEDED}
+	type resp struct {
+		err *connectorpb.ConnectorError
+		ev  *connectorpb.ProviderEvent
+	}
+	kind := func(k connectorpb.ErrorKind) *connectorpb.ConnectorError { return &connectorpb.ConnectorError{Kind: k} }
+	cases := []struct {
+		name string
+		in   resp
+		want error // nil: thành công
+	}{
+		{"ok", resp{nil, ok}, nil},
+		{"chữ ký sai, event nil", resp{kind(connectorpb.ErrorKind_ERROR_KIND_INVALID_SIGNATURE), nil}, connector.ErrInvalidSignature},
+		{"không liên quan, event nil", resp{kind(connectorpb.ErrorKind_ERROR_KIND_EVENT_NOT_RELEVANT), nil}, connector.ErrEventNotRelevant},
+		{"event nil không lỗi", resp{nil, nil}, connector.ErrUnknownOutcome},
+		{"status lạ", resp{nil, &connectorpb.ProviderEvent{EventId: "e", Status: 99}}, connector.ErrUnknownOutcome},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w, werr := connectorrpc.ParseWebhookResultFromProto(&connectorpb.ParseWebhookResponse{Error: c.in.err, Event: c.in.ev})
+			r, rerr := connectorrpc.ParseRedirectResultFromProto(&connectorpb.ParseRedirectResponse{Error: c.in.err, Event: c.in.ev})
+			if c.want == nil {
+				require.NoError(t, werr)
+				require.NoError(t, rerr)
+				assert.Equal(t, "e", w.EventID)
+				assert.Equal(t, w, r)
+				return
+			}
+			assert.ErrorIs(t, werr, c.want)
+			assert.ErrorIs(t, rerr, c.want)
+			if c.want != connector.ErrUnknownOutcome {
+				assert.NotErrorIs(t, werr, connector.ErrUnknownOutcome)
+				assert.NotErrorIs(t, rerr, connector.ErrUnknownOutcome)
+			}
+		})
+	}
+	_, err := connectorrpc.ParseWebhookResultFromProto(nil)
+	assert.ErrorIs(t, err, connector.ErrUnknownOutcome)
+	_, err = connectorrpc.ParseRedirectResultFromProto(nil)
+	assert.ErrorIs(t, err, connector.ErrUnknownOutcome)
+}
+
+func TestTimeToProto_OutOfRangeIsUnset(t *testing.T) {
+	for _, y := range []int{0, 10000} {
+		ts := time.Date(y, 1, 1, 0, 0, 0, 0, time.UTC)
+		assert.Nil(t, connectorrpc.TimeToProto(ts), y)
+		res := connectorrpc.PaymentStatusToProto(connector.PaymentStatus{Found: true, Status: connector.StatusSucceeded, PaidAt: ts})
+		_, err := proto.Marshal(res)
+		require.NoError(t, err)
+		got, err := connectorrpc.PaymentStatusFromProto(wire(t, res))
+		require.NoError(t, err)
+		assert.True(t, got.PaidAt.IsZero())
+	}
+	assert.NotNil(t, connectorrpc.TimeToProto(t0))
 }
 
 func TestRawExchange_Truncates(t *testing.T) {
@@ -241,7 +311,8 @@ func TestRawExchange_Truncates(t *testing.T) {
 	got = connectorrpc.RawExchangeToProto(connector.RawExchange{RequestBody: multi})
 	_, err := proto.Marshal(got)
 	require.NoError(t, err)
-	assert.True(t, strings.HasSuffix(got.RequestBody, "…[cắt]"))
+	// ký tự "ế" (3 byte) bắt đầu ở vị trí limit-1 nên bị cắt đôi: chỉ giữ phần 'a' phía trước.
+	assert.Equal(t, strings.Repeat("a", limit-1)+"…[cắt]", got.RequestBody)
 }
 
 func TestToProto_InvalidUTF8DoesNotBreakMarshal(t *testing.T) {
