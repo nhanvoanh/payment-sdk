@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -17,19 +18,20 @@ const certCheckInterval = 30 * time.Second
 type TLSFiles struct{ CertFile, KeyFile, CAFile string }
 
 // ServerTLS dựng cấu hình TLS 1.3 cho server, bắt buộc và kiểm chứng chỉ client theo CAFile.
-// Cặp chứng chỉ được đọc lại khi file đổi (kiểm không dày hơn 30 giây); đọc lại hỏng thì giữ cặp cũ.
+// Cặp chứng chỉ được đọc lại khi file đổi (kiểm không dày hơn 30 giây); đọc lại hỏng thì giữ cặp cũ
+// và ghi một dòng Warn qua slog.Default(). CA đọc một lần; đổi CA cần khởi động lại.
 func ServerTLS(f TLSFiles) (*tls.Config, error) {
-	return serverTLS(f, certCheckInterval, time.Now)
+	return serverTLS(f, certCheckInterval, time.Now, nil)
 }
 
 // ClientTLS dựng cấu hình TLS 1.3 cho client: kiểm chứng chỉ server theo CAFile và serverName,
-// xuất trình chứng chỉ client; quy tắc đọc lại giống ServerTLS.
+// xuất trình chứng chỉ client; quy tắc đọc lại giống ServerTLS. CA đọc một lần; đổi CA cần khởi động lại.
 func ClientTLS(f TLSFiles, serverName string) (*tls.Config, error) {
-	return clientTLS(f, serverName, certCheckInterval, time.Now)
+	return clientTLS(f, serverName, certCheckInterval, time.Now, nil)
 }
 
-func serverTLS(f TLSFiles, interval time.Duration, now func() time.Time) (*tls.Config, error) {
-	r, pool, err := load(f, interval, now)
+func serverTLS(f TLSFiles, interval time.Duration, now func() time.Time, log *slog.Logger) (*tls.Config, error) {
+	r, pool, err := load(f, interval, now, log)
 	if err != nil {
 		return nil, err
 	}
@@ -41,11 +43,11 @@ func serverTLS(f TLSFiles, interval time.Duration, now func() time.Time) (*tls.C
 	}, nil
 }
 
-func clientTLS(f TLSFiles, serverName string, interval time.Duration, now func() time.Time) (*tls.Config, error) {
+func clientTLS(f TLSFiles, serverName string, interval time.Duration, now func() time.Time, log *slog.Logger) (*tls.Config, error) {
 	if serverName == "" {
 		return nil, errors.New("connectorrpc: thiếu serverName để kiểm chứng chỉ server")
 	}
-	r, pool, err := load(f, interval, now)
+	r, pool, err := load(f, interval, now, log)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +59,7 @@ func clientTLS(f TLSFiles, serverName string, interval time.Duration, now func()
 	}, nil
 }
 
-func load(f TLSFiles, interval time.Duration, now func() time.Time) (*certReloader, *x509.CertPool, error) {
+func load(f TLSFiles, interval time.Duration, now func() time.Time, log *slog.Logger) (*certReloader, *x509.CertPool, error) {
 	pem, err := os.ReadFile(f.CAFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connectorrpc: đọc CA: %w", err)
@@ -66,7 +68,7 @@ func load(f TLSFiles, interval time.Duration, now func() time.Time) (*certReload
 	if !pool.AppendCertsFromPEM(pem) {
 		return nil, nil, fmt.Errorf("connectorrpc: %s không chứa chứng chỉ CA hợp lệ", f.CAFile)
 	}
-	r, err := newCertReloader(f, interval, now)
+	r, err := newCertReloader(f, interval, now, log)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -84,15 +86,17 @@ type certReloader struct {
 	files    TLSFiles
 	interval time.Duration
 	now      func() time.Time
+	log      *slog.Logger // nil: slog.Default() tại lúc ghi
 
 	mu      sync.Mutex
 	cert    *tls.Certificate
 	stamp   fileStamp
 	checked time.Time
+	warned  string // khoá của trạng thái hỏng đã báo, để không lặp lại mỗi lần kiểm
 }
 
-func newCertReloader(f TLSFiles, interval time.Duration, now func() time.Time) (*certReloader, error) {
-	r := &certReloader{files: f, interval: interval, now: now}
+func newCertReloader(f TLSFiles, interval time.Duration, now func() time.Time, log *slog.Logger) (*certReloader, error) {
+	r := &certReloader{files: f, interval: interval, now: now, log: log}
 	st, err := r.stat()
 	if err != nil {
 		return nil, fmt.Errorf("connectorrpc: đọc chứng chỉ: %w", err)
@@ -122,11 +126,38 @@ func (r *certReloader) get() *tls.Certificate {
 	defer r.mu.Unlock()
 	if now := r.now(); now.Sub(r.checked) >= r.interval {
 		r.checked = now
-		if st, err := r.stat(); err == nil && st != r.stamp {
-			if c, err := tls.LoadX509KeyPair(r.files.CertFile, r.files.KeyFile); err == nil {
-				r.cert, r.stamp = &c, st
-			}
-		}
+		r.refresh()
 	}
 	return r.cert
+}
+
+// refresh thử nạp lại khi file đổi. Hỏng thì giữ cặp cũ và báo Warn một lần cho mỗi trạng thái file hỏng.
+func (r *certReloader) refresh() {
+	st, err := r.stat()
+	if err != nil {
+		r.warn("stat:"+err.Error(), err)
+		return
+	}
+	if st == r.stamp {
+		return
+	}
+	c, err := tls.LoadX509KeyPair(r.files.CertFile, r.files.KeyFile)
+	if err != nil {
+		r.warn(fmt.Sprintf("load:%v", st), err)
+		return
+	}
+	r.cert, r.stamp, r.warned = &c, st, ""
+}
+
+func (r *certReloader) warn(key string, err error) {
+	if r.warned == key {
+		return
+	}
+	r.warned = key
+	log := r.log
+	if log == nil {
+		log = slog.Default()
+	}
+	// Chỉ ghi đường dẫn và lỗi, không bao giờ nội dung khoá hay chứng chỉ.
+	log.Warn("đọc lại chứng chỉ thất bại, giữ cặp cũ", "cert", r.files.CertFile, "key", r.files.KeyFile, "error", err)
 }

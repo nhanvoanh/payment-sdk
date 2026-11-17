@@ -58,7 +58,7 @@ func Serve(ctx context.Context, c connector.Connector, o Options) error {
 	if err != nil {
 		return fmt.Errorf("connectorsdk: nghe %s: %w", addr, err)
 	}
-	return serveOn(ctx, c, o, lis)
+	return ServeListener(ctx, c, o, lis)
 }
 
 func (o Options) validate() error {
@@ -71,14 +71,19 @@ func (o Options) validate() error {
 		return errors.New("connectorsdk: TLS phải từ 1.3 trở lên")
 	case o.TLS != nil && o.TLS.ClientAuth != tls.RequireAndVerifyClientCert:
 		return errors.New("connectorsdk: TLS phải bắt buộc chứng chỉ client (RequireAndVerifyClientCert)")
+	case o.TLS != nil && o.TLS.ClientCAs == nil:
+		return errors.New("connectorsdk: TLS thiếu ClientCAs để kiểm chứng chỉ client")
+	case o.TLS != nil && o.TLS.GetConfigForClient != nil:
+		return errors.New("connectorsdk: TLS có GetConfigForClient có thể đè cấu hình kiểm client; không được dùng")
 	case o.TLS != nil && len(o.AllowedClients) == 0:
 		return errors.New("connectorsdk: AllowedClients rỗng; liệt kê tên DNS của client được phép")
 	}
 	return nil
 }
 
-// serveOn là thân của Serve trên một listener có sẵn (test dùng cổng :0).
-func serveOn(ctx context.Context, c connector.Connector, o Options, lis net.Listener) error {
+// ServeListener là Serve trên một listener có sẵn (ListenAddr bị bỏ qua), để test dùng cổng :0.
+// Listener được đóng khi hàm trả về.
+func ServeListener(ctx context.Context, c connector.Connector, o Options, lis net.Listener) error {
 	if err := o.validate(); err != nil {
 		_ = lis.Close()
 		return err
@@ -103,7 +108,7 @@ func serveOn(ctx context.Context, c connector.Connector, o Options, lis net.List
 	opts := []grpc.ServerOption{
 		grpc.MaxConcurrentStreams(streams),
 		// Thứ tự: log ngoài cùng để thấy cả lời gọi bị từ chối và panic đã thành Internal.
-		grpc.ChainUnaryInterceptor(logInterceptor(log), authInterceptor(o.TLS != nil, allowed), recoverInterceptor(log)),
+		grpc.ChainUnaryInterceptor(logInterceptor(log), authInterceptor(log, o.TLS != nil, allowed), recoverInterceptor(log)),
 	}
 	if o.TLS != nil {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(o.TLS)))
@@ -114,15 +119,25 @@ func serveOn(ctx context.Context, c connector.Connector, o Options, lis net.List
 	grpc_health_v1.RegisterHealthServer(srv, hs)
 	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 
+	if o.Insecure {
+		log.Warn("connector chạy KHÔNG mã hoá và không xác thực client (Insecure); chỉ dùng khi phát triển")
+	}
+
+	served := make(chan struct{}) // đóng khi srv.Serve trả về, để goroutine tắt không chờ ctx mãi
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-served:
+			return
+		}
 		hs.Shutdown()
 		graceful := make(chan struct{})
 		go func() { srv.GracefulStop(); close(graceful) }()
 		t := time.NewTimer(grace)
 		defer t.Stop()
+		// Luồng Watch của health cũng là lời gọi đang chạy: client không đóng nó thì chờ hết grace.
 		select {
 		case <-graceful:
 		case <-t.C:
@@ -132,14 +147,15 @@ func serveOn(ctx context.Context, c connector.Connector, o Options, lis net.List
 	}()
 
 	err := srv.Serve(lis)
-	// Serve trả về khi server bị dừng; nếu lý do là lỗi nghe thì ctx chưa huỷ, ép dừng để goroutine thoát.
-	if ctx.Err() == nil {
-		srv.Stop()
-	}
+	close(served)
 	<-stopped
 	if ctx.Err() != nil {
 		return nil
 	}
+	if err == nil {
+		err = errors.New("connectorsdk: server dừng ngoài ý muốn")
+	}
+	srv.Stop()
 	return err
 }
 
@@ -147,7 +163,8 @@ func recoverInterceptor(log *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (resp any, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Error("connector panic", "rpc", info.FullMethod, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+				// Không ghi giá trị panic: có thể chứa thân request hay credential.
+				log.Error("connector panic", "rpc", info.FullMethod, "panic_type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()))
 				resp, err = nil, status.Error(codes.Internal, "lỗi nội bộ của connector")
 			}
 		}()
@@ -157,13 +174,27 @@ func recoverInterceptor(log *slog.Logger) grpc.UnaryServerInterceptor {
 
 // authInterceptor chỉ cho client có một tên DNS SAN nằm trong allowed. Chạy sau bước TLS đã kiểm chuỗi
 // chứng chỉ; Insecure thì bỏ qua (không có danh tính). Health được miễn để bộ giám sát kiểm tra mà không cần là client.
-func authInterceptor(tlsOn bool, allowed map[string]bool) grpc.UnaryServerInterceptor {
+func authInterceptor(log *slog.Logger, tlsOn bool, allowed map[string]bool) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 		if tlsOn && !strings.HasPrefix(info.FullMethod, healthPrefix) && !clientAllowed(ctx, allowed) {
+			logDenied(ctx, log, info.FullMethod)
 			return nil, status.Error(codes.PermissionDenied, "client không nằm trong danh sách được phép")
 		}
 		return h(ctx, req)
 	}
+}
+
+// logDenied ghi DNS SAN và serial của chứng chỉ bị từ chối để vận hành biết ai gọi; không ghi khoá hay cả chứng chỉ.
+func logDenied(ctx context.Context, log *slog.Logger, method string) {
+	var dns []string
+	var serial string
+	if p, ok := peer.FromContext(ctx); ok {
+		if ti, ok := p.AuthInfo.(credentials.TLSInfo); ok && len(ti.State.PeerCertificates) > 0 {
+			leaf := ti.State.PeerCertificates[0]
+			dns, serial = leaf.DNSNames, leaf.SerialNumber.Text(16)
+		}
+	}
+	log.Warn("từ chối client không nằm trong danh sách được phép", "rpc", method, "dns_sans", dns, "serial", serial)
 }
 
 func clientAllowed(ctx context.Context, allowed map[string]bool) bool {

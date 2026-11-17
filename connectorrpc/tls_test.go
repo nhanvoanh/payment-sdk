@@ -1,10 +1,13 @@
 package connectorrpc_test
 
 import (
+	"bytes"
 	"crypto/tls"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,10 +56,12 @@ func TestTLS_ReloadsRotatedCert(t *testing.T) {
 	third := b.Server("srv.test")
 	clk := &clock{t: time.Unix(1_000_000, 0)}
 	mtime := time.Now()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
 
-	srv, err := connectorrpc.ServerTLSWithClock(live, 30*time.Second, clk.now)
+	srv, err := connectorrpc.ServerTLSWithClock(live, 30*time.Second, clk.now, logger)
 	require.NoError(t, err)
-	cli, err := connectorrpc.ClientTLSWithClock(b.Client("cli.test"), "srv.test", 30*time.Second, clk.now)
+	cli, err := connectorrpc.ClientTLSWithClock(b.Client("cli.test"), "srv.test", 30*time.Second, clk.now, logger)
 	require.NoError(t, err)
 
 	first := serverSerial(t, srv, cli)
@@ -76,6 +81,13 @@ func TestTLS_ReloadsRotatedCert(t *testing.T) {
 	require.NoError(t, os.Chtimes(live.CertFile, mtime.Add(2*time.Hour), mtime.Add(2*time.Hour)))
 	clk.t = clk.t.Add(31 * time.Second)
 	require.Equal(t, second, serverSerial(t, srv, cli))
+	require.Equal(t, 1, strings.Count(logs.String(), "giữ cặp cũ"), "báo Warn khi đọc lại hỏng")
+	require.NotContains(t, logs.String(), "rác", "không ghi nội dung file")
+
+	// File chưa đổi: không báo lặp lại mỗi lần kiểm.
+	clk.t = clk.t.Add(31 * time.Second)
+	require.Equal(t, second, serverSerial(t, srv, cli))
+	require.Equal(t, 1, strings.Count(logs.String(), "giữ cặp cũ"))
 
 	// Sửa lại bằng cặp hợp lệ: lần kiểm kế tiếp nhận.
 	copyPair(t, third, live, mtime.Add(3*time.Hour))

@@ -55,7 +55,7 @@ type running struct {
 	addr   string
 	cancel context.CancelFunc
 	done   chan error
-	exited chan struct{} // đóng sau khi serveOn trả về và kết quả đã nằm trong done
+	exited chan struct{} // đóng sau khi ServeListener trả về và kết quả đã nằm trong done
 }
 
 func start(t *testing.T, c connector.Connector, o Options) *running {
@@ -67,7 +67,7 @@ func start(t *testing.T, c connector.Connector, o Options) *running {
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	go func() { r.done <- serveOn(ctx, c, o, lis); close(r.exited) }()
+	go func() { r.done <- ServeListener(ctx, c, o, lis); close(r.exited) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -109,12 +109,16 @@ func createReq() *connectorpb.CreatePaymentRequest {
 }
 
 // mtlsEnv dựng server TLS cho phép "cli.test" và trả cấu hình client đúng.
-func mtlsEnv(t *testing.T, f *connectortest.Fake, allowed ...string) (*running, *tlstest.Bundle, *tls.Config) {
+func mtlsEnv(t *testing.T, f *connectortest.Fake, logs *syncBuf, allowed ...string) (*running, *tlstest.Bundle, *tls.Config) {
 	t.Helper()
 	b := tlstest.New(t)
 	srvCfg, err := connectorrpc.ServerTLS(b.Server(srvName))
 	require.NoError(t, err)
-	r := start(t, f, Options{TLS: srvCfg, AllowedClients: allowed})
+	o := Options{TLS: srvCfg, AllowedClients: allowed}
+	if logs != nil {
+		o.Logger = newLogger(logs)
+	}
+	r := start(t, f, o)
 	cli, err := connectorrpc.ClientTLS(b.Client("cli.test"), srvName)
 	require.NoError(t, err)
 	return r, b, cli
@@ -144,11 +148,17 @@ func TestServe_RejectsWeakTLSConfig(t *testing.T) {
 	old.MinVersion = tls.VersionTLS12
 	require.Error(t, Serve(context.Background(), newFake(), Options{TLS: old, AllowedClients: []string{"x"}}))
 	require.Error(t, Serve(context.Background(), newFake(), Options{TLS: cfg, Insecure: true, AllowedClients: []string{"x"}}))
+	noCAs := cfg.Clone()
+	noCAs.ClientCAs = nil
+	require.Error(t, Serve(context.Background(), newFake(), Options{TLS: noCAs, AllowedClients: []string{"x"}}))
+	override := cfg.Clone()
+	override.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) { return nil, nil }
+	require.Error(t, Serve(context.Background(), newFake(), Options{TLS: override, AllowedClients: []string{"x"}}))
 }
 
 func TestMTLS_HappyPath(t *testing.T) {
 	f := newFake()
-	r, _, cliCfg := mtlsEnv(t, f, "cli.test")
+	r, _, cliCfg := mtlsEnv(t, f, nil, "cli.test")
 	cl := tlsClient(t, r.addr, cliCfg)
 	d, err := cl.Describe(ctx5(t), &connectorpb.DescribeRequest{})
 	require.NoError(t, err)
@@ -161,16 +171,13 @@ func TestMTLS_HappyPath(t *testing.T) {
 
 func TestMTLS_Rejections(t *testing.T) {
 	f := newFake()
-	r, b, good := mtlsEnv(t, f, "cli.test")
+	r, b, good := mtlsEnv(t, f, nil, "cli.test")
 	other := b.OtherCA()
 
 	noCert := good.Clone()
 	noCert.GetClientCertificate = nil
 
 	otherCfg, err := connectorrpc.ClientTLS(withCA(other.Client("cli.test"), b.Server("x").CAFile), srvName)
-	require.NoError(t, err)
-
-	notAllowed, err := connectorrpc.ClientTLS(b.Client("intruder.test"), srvName)
 	require.NoError(t, err)
 
 	wrongName, err := connectorrpc.ClientTLS(b.Client("cli.test"), "wrong.test")
@@ -180,12 +187,11 @@ func TestMTLS_Rejections(t *testing.T) {
 	tls12.MinVersion, tls12.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
 
 	for name, cfg := range map[string]*tls.Config{
-		"no client cert": noCert, "other CA": otherCfg, "not in allow list": notAllowed,
-		"wrong server name": wrongName, "TLS 1.2": tls12,
+		"no client cert": noCert, "other CA": otherCfg, "wrong server name": wrongName, "TLS 1.2": tls12,
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := tlsClient(t, r.addr, cfg).CreatePayment(ctx5(t), createReq())
-			require.Error(t, err)
+			require.Equal(t, codes.Unavailable, status.Code(err), "từ chối ở lớp bắt tay: %v", err)
 			require.Equal(t, 0, f.Calls("create"))
 		})
 	}
@@ -197,15 +203,44 @@ func withCA(f connectorrpc.TLSFiles, ca string) connectorrpc.TLSFiles {
 }
 
 func TestMTLS_NotInAllowListIsPermissionDenied(t *testing.T) {
-	r, b, _ := mtlsEnv(t, newFake(), "cli.test")
+	logs := &syncBuf{}
+	r, b, _ := mtlsEnv(t, newFake(), logs, "cli.test")
 	cfg, err := connectorrpc.ClientTLS(b.Client("intruder.test"), srvName)
 	require.NoError(t, err)
 	_, err = tlsClient(t, r.addr, cfg).Describe(ctx5(t), &connectorpb.DescribeRequest{})
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Contains(t, logs.String(), "intruder.test")
+	require.Contains(t, logs.String(), "serial=")
+	require.NotContains(t, logs.String(), "PRIVATE KEY")
+}
+
+func TestServe_ReturnsWhenListenerFails(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	require.NoError(t, lis.Close())
+	done := make(chan error, 1)
+	go func() {
+		done <- ServeListener(context.Background(), newFake(), Options{Insecure: true, Logger: discard()}, lis)
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("ServeListener treo khi Serve lỗi mà ctx chưa huỷ")
+	}
+}
+
+func TestServe_WarnsWhenInsecure(t *testing.T) {
+	logs := &syncBuf{}
+	r := start(t, newFake(), Options{Insecure: true, Logger: newLogger(logs)})
+	_, err := connectorpb.NewConnectorServiceClient(plainClient(t, r.addr)).Describe(ctx5(t), &connectorpb.DescribeRequest{}, grpc.WaitForReady(true))
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(logs.String(), "level=WARN"))
+	require.Contains(t, logs.String(), "Insecure")
 }
 
 func TestServe_HealthWithoutAllowList(t *testing.T) {
-	r, b, _ := mtlsEnv(t, newFake(), "cli.test")
+	r, b, _ := mtlsEnv(t, newFake(), nil, "cli.test")
 	cfg, err := connectorrpc.ClientTLS(b.Client("intruder.test"), srvName)
 	require.NoError(t, err)
 	h := grpc_health_v1.NewHealthClient(dial(t, r.addr, credentials.NewTLS(cfg)))
@@ -229,6 +264,8 @@ func TestServe_PanicBecomesInternalAndServerSurvives(t *testing.T) {
 	_, err = cl.Describe(ctx5(t), &connectorpb.DescribeRequest{})
 	require.NoError(t, err)
 	require.Contains(t, logs.String(), "goroutine", "log có stack")
+	require.NotContains(t, logs.String(), "boom-secret", "không ghi giá trị panic")
+	require.Contains(t, logs.String(), "panic_type=string")
 }
 
 func TestServe_LogsNoBodies(t *testing.T) {
@@ -332,5 +369,7 @@ func TestServe_ShutdownGraceForcesStop(t *testing.T) {
 	require.NoError(t, <-r.done)
 	require.Error(t, <-errc)
 }
+
+func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func newLogger(w *syncBuf) *slog.Logger { return slog.New(slog.NewTextHandler(w, nil)) }
