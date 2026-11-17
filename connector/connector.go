@@ -65,6 +65,16 @@ type RawWebhook struct {
 	RemoteIP string
 }
 
+// Giá trị đối tác trả về (trong các *Result, PaymentStatus, RefundStatus, ProviderEvent và RejectedError)
+// được core chuẩn hoá trước khi lưu, nên connector chuyển nguyên giá trị đối tác gửi, không tự cắt:
+//   - ProviderRef: UTF-8 hỏng thay bằng U+FFFD, bỏ ký tự điều khiển, cắt còn 255 ký tự.
+//   - EventID: giữ nguyên nếu là UTF-8 hợp lệ, không có ký tự điều khiển và dài tối đa 255 ký tự; nếu
+//     không, core dùng "sha256:" + hex(sha256(byte gốc)) làm khoá khử trùng (vẫn ổn định qua các lần gửi lại).
+//   - AmountPaid.Currency: khác rỗng mà không đúng ba chữ A–Z thì thành "XXX"; vì khác tiền tệ của giao
+//     dịch, giao dịch sang on_hold (lệch tiền) chứ không bị ghi lỗi. Số tiền giữ nguyên.
+//   - ProviderCode, ProviderMessage: UTF-8 hợp lệ, bỏ ký tự điều khiển; core cắt còn 64 và 500 ký tự.
+//   - NextAction và Card: UTF-8 hỏng thay bằng U+FFFD, không giới hạn độ dài.
+
 type CreatePaymentRequest struct {
 	TransactionCode, IdempotencyKey string
 	Money                           paykit.Money
@@ -108,7 +118,7 @@ const (
 // ProviderEvent là sự kiện đã chuẩn hoá từ webhook hoặc redirect.
 type ProviderEvent struct {
 	// EventID bắt buộc và phải giống hệt nhau qua mọi lần đối tác gửi lại cùng một sự kiện: core khử
-	// trùng theo (đối tác, EventID).
+	// trùng theo (đối tác, EventID). Quá 255 ký tự hoặc không lưu nguyên được thì core băm (xem ở trên).
 	EventID                     string
 	Kind                        EventKind
 	TransactionCode, RefundCode string
