@@ -75,8 +75,8 @@ func (f *Fake) record(op string) {
 }
 
 // enter ghi nhận lời gọi; false nếu capability đang tắt (khi đó không đếm).
-func (f *Fake) enter(cap connector.Operation, op string) bool {
-	if !f.Supports(cap) {
+func (f *Fake) enter(capab connector.Operation, op string) bool {
+	if !f.Supports(capab) {
 		return false
 	}
 	f.record(op)

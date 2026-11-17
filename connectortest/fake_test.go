@@ -100,7 +100,7 @@ func TestFake_DisabledCapabilityNotSupported(t *testing.T) {
 func TestFake_HooksAndCallLog(t *testing.T) {
 	f := New("acme")
 	boom := errors.New("boom")
-	f.OnCreate = func(_ context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+	f.OnCreate = func(context.Context, connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
 		// Hook chạy không giữ khoá: gọi ngược Fake không được deadlock.
 		assert.Equal(t, 1, f.Calls("create"))
 		return connector.CreatePaymentResult{}, boom
