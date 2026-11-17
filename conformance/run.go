@@ -11,7 +11,8 @@ import (
 type rule struct {
 	id            string
 	op            connector.Operation
-	createPartner bool // cần Create gọi đối tác (Harness.CreateCallsPartner)
+	createPartner bool   // cần Create gọi đối tác (Harness.CreateCallsPartner)
+	grpcSkip      string // khác rỗng: lượt /grpc không kiểm được gì, bỏ với lý do này
 	check         func(e *env)
 }
 
@@ -30,6 +31,7 @@ var rules = []rule{
 	{id: "QRY-1", op: connector.OpQueryPayment, check: checkQRY1},
 	{id: "QRY-2", op: connector.OpQueryPayment, check: checkQRY2},
 	{id: "QRY-3", op: connector.OpQueryPayment, check: checkQRY3},
+	{id: "QRY-4", op: connector.OpQueryPayment, check: checkQRY4},
 	{id: "CHG-1", op: connector.OpCharge, check: checkCHG1},
 	{id: "CXL-1", op: connector.OpCancel, check: checkCXL1},
 	{id: "CXL-2", op: connector.OpCancel, check: checkCXL2},
@@ -38,10 +40,13 @@ var rules = []rule{
 	{id: "WHK-3", op: connector.OpWebhook, check: checkWHK3},
 	{id: "WHK-4", op: connector.OpWebhook, check: checkWHK4},
 	{id: "WHK-5", op: connector.OpWebhook, check: checkWHK5},
-	{id: "WHK-6", op: connector.OpWebhook, check: checkWHK6},
+	{id: "WHK-6", op: connector.OpWebhook, check: checkWHK6,
+		grpcSkip: "proxy gRPC trả ack từ bảng lấy một lần lúc Describe, không gọi lại connector nên không kiểm được tính thuần"},
 	{id: "RFD-1", op: connector.OpRefund, check: checkRFD1},
 	{id: "RFD-2", op: connector.OpQueryRefund, check: checkRFD2},
-	{id: "CTX-1", check: checkCTX1},
+	{id: "RFD-3", op: connector.OpQueryRefund, check: checkRFD3},
+	{id: "CTX-1", check: checkCTX1,
+		grpcSkip: "proxy gRPC gặp ctx đã huỷ thì trả về ngay mà không gửi, connector không nhận được lời gọi nào để kiểm"},
 }
 
 const grpcSuffix = "/grpc"
@@ -72,6 +77,9 @@ func Check(tb testing.TB, h Harness) Report {
 func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]string, string) {
 	if r.createPartner && !h.CreateCallsPartner {
 		return nil, "Create không gọi đối tác (Harness.CreateCallsPartner sai)"
+	}
+	if viaGRPC && r.grpcSkip != "" {
+		return nil, r.grpcSkip
 	}
 	c, p := h.New(tb)
 	e := &env{h: h, c: c, orig: c, p: p, rule: code, ops: declared(c)}

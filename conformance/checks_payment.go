@@ -213,6 +213,20 @@ func (e *env) expectUnknown(m Mode, what string, fn func(ctx context.Context) er
 	e.fail("%s %s trả %v (core hiểu là %s); cần ErrUnknownOutcome, không được khớp ErrProviderUnavailable, ErrNotSupported hay ErrProviderRejected; core sẽ chốt thất bại trong khi đối tác có thể đã trừ tiền, khách trả tiền hai lần", what, situation, err, outcomeText(err))
 }
 
+// expectError: với truy vấn, core coi mọi lỗi như nhau (thử lại sau); điều nguy hiểm duy nhất là err nil,
+// vì khi đó core tin Found/Status mà connector đọc từ một câu trả lời không có hoặc không hiểu được.
+func (e *env) expectError(m Mode, what, consequence string, fn func(ctx context.Context) error) {
+	ok, err := e.modeCall(m, what, fn)
+	if !ok || err != nil {
+		return
+	}
+	situation := "khi hết hạn chờ đối tác"
+	if m == ModeGarbage {
+		situation = "khi đối tác trả thân không đọc được"
+	}
+	e.fail("%s %s trả err nil; cần một lỗi bất kỳ; %s", what, situation, consequence)
+}
+
 func errText(err error) string {
 	if err == nil {
 		return "err nil"
@@ -428,4 +442,19 @@ func checkCHG1(e *env) {
 	e.expectUnknown(ModeHang, "Charge", fn(e.tx()))
 	e.expectRejected("Charge", fn(e.tx()))
 	e.expectUnknown(ModeGarbage, "Charge", fn(e.tx()))
+}
+
+// checkQRY4: truy vấn gặp thân rác mà trả err nil thì core tin Found/Status bịa ra.
+func checkQRY4(e *env) {
+	tx := e.tx()
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
+	e.expectError(ModeGarbage, "QueryPayment",
+		"core áp kết quả connector tự suy ra (failed thì khách tạo lại thanh toán trong khi đối tác có thể đã thu tiền; không thấy thì giao dịch bị cho hết hạn)",
+		func(ctx context.Context) error {
+			_, err := e.querier().QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref})
+			return err
+		})
 }

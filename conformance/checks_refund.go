@@ -57,3 +57,17 @@ func checkRFD2(e *env) {
 		e.fail("QueryRefund cho lệnh hoàn đối tác không biết trả Found true (Status %q); cần Found false; core có thể ghi nhận một khoản hoàn không có thật", st.Status)
 	}
 }
+
+// checkRFD3: truy vấn hoàn tiền khi đối tác treo hay trả rác phải ra lỗi; err nil thì core tin kết quả bịa.
+func checkRFD3(e *env) {
+	q, _ := e.c.(connector.RefundQuerier)
+	tx := e.tx()
+	for _, m := range []Mode{ModeHang, ModeGarbage} {
+		e.expectError(m, "QueryRefund",
+			"core áp kết quả connector tự suy ra (failed thì core chốt hoàn thất bại và có thể hoàn tiền cho khách hai lần)",
+			func(ctx context.Context) error {
+				_, err := q.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx, TransactionCode: tx})
+				return err
+			})
+	}
+}

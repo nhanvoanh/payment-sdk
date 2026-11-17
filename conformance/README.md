@@ -34,6 +34,9 @@ thất bại), mọi lỗi khác là chưa rõ. Vì vậy:
 Ở lượt `/grpc` của phần "đối tác treo", proxy có hạn 300 ms + 2 s còn server bọc ctx của handler bằng hạn
 300 ms, nên câu trả lời của connector (đúng hay sai) luôn tới được proxy: kết quả tất định.
 
+Hai lượt `/grpc` luôn bị bỏ vì proxy không cho kiểm được gì: `WHK-6/grpc` (proxy trả ack từ bảng lấy một
+lần lúc Describe) và `CTX-1/grpc` (proxy gặp ctx đã huỷ thì trả về ngay, không gửi).
+
 ## Luật
 
 Mã luật cố định, là hợp đồng với developer connector.
@@ -53,9 +56,10 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `QRY-1` | (có `query_payment`) giao dịch đối tác không biết → `Found == false`, không lỗi. | Core truy vấn cả giao dịch chưa tới được đối tác; báo lỗi thì không bao giờ đóng được giao dịch đó. |
 | `QRY-2` | Sau `SetPaymentStatus(succeeded, amount)` → `Found`, `Status == succeeded`, `AmountPaid` bằng số đã đặt hoặc 0; `Currency` rỗng hoặc ba chữ hoa. | Khách đã trả mà đơn không được xác nhận, hoặc giao dịch rơi vào lệch tiền. |
 | `QRY-3` | (có `query_payment`) `ModeHang` → như `PAY-4`. | Như `PAY-4`. |
+| `QRY-4` | (có `query_payment`) `ModeGarbage` → có lỗi (lỗi nào cũng được); `err == nil` là vi phạm dù `Found` là gì. | Với truy vấn, core coi mọi lỗi như nhau (truy vấn lại sau); err nil thì core tin kết quả bịa: `failed` khiến khách tạo lại thanh toán trong khi đối tác có thể đã thu, "không thấy" khiến giao dịch bị cho hết hạn. |
 | `CHG-1` | (có `charge`) `ModeDown` → như `PAY-3`; `ModeHang` → như `PAY-4`; `ModeReject` → như `PAY-5`; `ModeGarbage` → như `PAY-6`. | Charge thu tiền trực tiếp: báo "chắc chắn chưa xử lý" cho một lần treo thì core chốt thất bại trong khi thẻ của khách đã bị trừ. |
 | `CXL-1` | (có `cancel`) sau `SetPaymentStatus(succeeded)`, huỷ **không** được trả `StatusCanceled` kèm `err == nil`. | Core huỷ đơn trong khi khách đã bị trừ tiền. |
-| `CXL-2` | (có `cancel`) `ModeHang` và `ModeGarbage` → lỗi "chưa rõ theo core", hoặc err nil với trạng thái khác `StatusCanceled`; tuyệt đối không `err == nil` kèm `StatusCanceled`. | Không ai biết đối tác đã huỷ chưa; báo "đã huỷ" thì core huỷ đơn trong khi đối tác có thể vẫn thu tiền. |
+| `CXL-2` | (có `cancel`) `ModeHang` và `ModeGarbage` → lỗi "chưa rõ theo core", hoặc err nil với trạng thái khác `StatusCanceled`; tuyệt đối không `err == nil` kèm `StatusCanceled`. | Không ai biết đối tác đã huỷ chưa; báo "đã huỷ" thì core huỷ đơn trong khi đối tác có thể vẫn thu tiền. `nil` kèm `StatusPending` (hay trạng thái khác canceled) được chấp nhận: core hiểu là chưa huỷ và truy vấn lại, không mất tiền. |
 | `WHK-1` | (có `webhook`) webhook hợp lệ → `EventID` khác rỗng, `Kind == payment`, `TransactionCode` và `Status` đúng. | Sự kiện áp nhầm giao dịch, hoặc khách đã trả mà đơn không được xác nhận. |
 | `WHK-2` | Phân tích cùng một webhook hai lần → cùng `EventID`. | Core khử trùng theo `EventID`; đổi thì lần gửi lại bị áp như sự kiện mới. |
 | `WHK-3` | Webhook của hai giao dịch khác nhau → `EventID` khác nhau. | Sự kiện thứ hai bị coi là bản trùng và bỏ qua: khách đã trả mà đơn không được xác nhận. |
@@ -64,6 +68,7 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `WHK-6` | `AckWebhook` với cả bốn outcome: status 100–599; hai lần gọi cùng outcome ra cùng kết quả (hàm thuần). | Core hỏi một lần lúc nạp connector; không thuần thì đối tác nhận phản hồi khác ý connector. |
 | `RFD-1` | (có `refund`) `ModeDown`/`ModeHang`/`ModeReject`/`ModeGarbage` → như `PAY-3`/`PAY-4`/`PAY-5`/`PAY-6`. | Như các luật tương ứng của Create, cho tiền hoàn. |
 | `RFD-2` | (có `query_refund`) lệnh hoàn đối tác không biết → `Found == false`, không lỗi. | Core không đóng được lệnh hoàn chưa tới đối tác, khách không được hoàn lại. |
+| `RFD-3` | (có `query_refund`) `ModeHang` (ctx hạn 300 ms) và `ModeGarbage` → có lỗi; `err == nil` là vi phạm. | `failed` bịa ra khiến core chốt hoàn thất bại và có thể hoàn tiền cho khách hai lần; "không thấy" khiến core coi lệnh hoàn chưa tới đối tác. |
 | `CTX-1` | Mọi thao tác gọi mạng (Create, Charge, Query, Cancel, Refund, QueryRefund đã khai) nhận ctx đã huỷ, đối tác treo → trả về trong 2 s, không panic. | Core không dừng được lời gọi khi tắt máy hay khi khách bỏ đi. |
 
 `Harness.CreateCallsPartner == false` (Create chỉ ký tại chỗ) thì `PAY-3`..`PAY-6` bị bỏ.
