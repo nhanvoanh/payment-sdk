@@ -188,8 +188,12 @@ func TestValues_MultiLineValue(t *testing.T) {
 			}
 		}
 	}
-	// Dòng ngắn hơn MinValueRunes (như "Q1") không bị che riêng để không phá nát thân.
-	if got := redact.Values(`{"district":"Q1"}`, "12 Đường Canarystreet\nQ1"); got != `{"district":"Q1"}` {
+	// Thành phần ngắn hơn MinValueRunes (như "Q1") không bị che riêng để không phá nát thân; chỉ bị che khi là toàn
+	// bộ giá trị của một trường gợi ý địa chỉ.
+	if got := redact.Values(`{"note":"Q1"}`, "12 Đường Canarystreet\nQ1"); got != `{"note":"Q1"}` {
 		t.Errorf("dòng ngắn bị che: %s", got)
+	}
+	if got := redact.Values(`{"district":"Q1"}`, "12 Đường Canarystreet\nQ1"); got != `{"district":"[REDACTED]"}` {
+		t.Errorf("trường địa chỉ không bị che: %s", got)
 	}
 }

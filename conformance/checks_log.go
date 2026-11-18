@@ -2,7 +2,6 @@ package conformance
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
@@ -10,22 +9,15 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
 )
 
-// logCanary là khách mang chuỗi canh của LOG-1: tên có dấu (để thử \uXXXX và dạng bỏ dấu "HUYNH CANARYNAME" của
-// tên chủ thẻ; họ "Huỳnh" vì dạng bỏ dấu của nó không trùng một từ thông dụng), email có "+" (để thử URL-encode),
-// điện thoại đầu 0 (để thử 84/+84 và dấu phân cách), địa chỉ nhiều dòng (để thử \n đã escape và từng dòng bị
-// tách ra trường riêng).
-var logCanary = paykit.Customer{ID: "C-LOG1", Name: "Huỳnh Canaryname", Email: "canary.mail+log1@example.com", Phone: "0987654321",
+// logCanary là khách mang chuỗi canh của LOG-1: tên có dấu (để thử \uXXXX và dạng bỏ dấu "HUYNH DOAN CANARYNAME" của
+// tên chủ thẻ; họ "Huỳnh" và tên đệm "Đoàn" vì dạng bỏ dấu của chúng không trùng từ thông dụng, "Đoàn" để thử Đ→D ở
+// mức chữ), email có "+" (để thử URL-encode), điện thoại đầu 0 (để thử 84/+84 và dấu phân cách), địa chỉ nhiều
+// dòng (để thử \n đã escape và từng thành phần bị tách ra trường riêng).
+var logCanary = paykit.Customer{ID: "C-LOG1", Name: "Huỳnh Đoàn Canaryname", Email: "canary.mail+log1@example.com", Phone: "0987654321",
 	Address: "12 Đường Canarystreet\nPhường Bến Nghé, Quận 1"}
 
-// canary là cách LOG-1 dò: mọi dạng của tên, email, điện thoại, địa chỉ (cùng thuật toán với core), cộng từng
-// chữ của tên và dạng bỏ dấu của chúng (so trọn từ): connector tự tách họ/tên thì phải che phần đã tách.
-var canary = func() *redact.Redactor {
-	p := redact.Customer(logCanary.Name, logCanary.Email, logCanary.Phone, logCanary.Address)
-	for _, w := range strings.Fields(logCanary.Name) {
-		p.Words = append(p.Words, w, redact.Fold(w))
-	}
-	return redact.NewPII(p)
-}()
+// canary dò bằng ĐÚNG luật của providerhttp.RedactCustomer: connector che theo lời khuyên của LOG-1 thì qua LOG-1.
+var canary = redact.NewPII(redact.Customer(logCanary.Name, logCanary.Email, logCanary.Phone, logCanary.Address))
 
 const leakAdvice = "cần che trước khi trả, ví dụ providerhttp.RedactCustomer(body, khách) (hoặc RedactValues với các giá trị đọc từ phản hồi); vết lời gọi đối tác, bảng provider_events và log của core sẽ lưu dữ liệu cá nhân của khách"
 

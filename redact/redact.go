@@ -1,34 +1,30 @@
 // Package redact che dữ liệu cá nhân của khách và dữ liệu thẻ trong văn bản sắp được lưu vết hay ghi log.
-// Connector (qua providerhttp.RedactValues/RedactCustomer) và core dùng CHUNG thuật toán này. Chỉ dùng thư viện chuẩn.
+// Connector (qua providerhttp.RedactCustomer/RedactValues) và core dùng CHUNG thuật toán này. Chỉ dùng thư viện chuẩn.
 //
-// Hai lớp:
-//   - Giá trị ĐÃ BIẾT (PII):
-//   - Values (tên đầy đủ, email, điện thoại, địa chỉ) so CHUỖI CON, không phân biệt hoa thường, ở các dạng
-//     thô, JSON-escape (kể cả \uXXXX hoa/thường cho ký tự ngoài ASCII, "\/", và JSON lồng hai lần),
-//     URL-encode (QueryEscape, PathEscape), và dạng BỎ DẤU tiếng Việt (Đ→D, ă/â/ơ/ư và mọi dấu thanh).
-//     Giá trị nhiều dòng (địa chỉ) so cả nguyên vẹn, nối bằng dấu cách hay ", ", và từng dòng ≥ 12 ký tự.
-//     Giá trị dạng số điện thoại so theo chữ số, cho phép dấu phân cách xen giữa và các đầu 0 / 84 / +84 /
-//     (+84) / +84(0), không bao giờ cắt giữa một dãy số dài hơn.
-//   - Words (chữ tách từ tên) chỉ so TRỌN TỪ (hai bên không phải chữ, số hay "_"; chữ đứng trần sau ":"
-//     như true/false/null của JSON không tính), không bỏ dấu, chữ ≥ 2 ký tự.
-//   - Cards: không cần giá trị biết trước: 13–19 chữ số (liền nhau hoặc nhóm cách nhau bởi một dấu cách/gạch),
-//     không dính chữ hay số khác, qua Luhn, đầu số 2–6 hoặc 9704 → giữ 6 số đầu + 4 số cuối; giá trị của trường
-//     cvv/cvc/cvn/card_cvv/security_code (JSON, form, XML) thành Mask.
+// Cách làm: thân được CHUẨN HOÁ một lần (giải mã \uXXXX kể cả lồng hai lần, \n \t \/ \", %HH, "+" thành dấu cách;
+// bỏ dấu tiếng Việt; chữ thường; dấu cách, xuống dòng, dấu phẩy, " - " gộp thành một dấu cách), kèm bảng ánh xạ
+// từng byte chuẩn hoá về byte gốc. Mọi so khớp chạy trên bản chuẩn hoá (giá trị cũng được chuẩn hoá cùng cách), nên
+// một mẫu bắt được mọi dạng mã hoá, hoa thường và có/không dấu. Các khoảng khớp được gộp (hợp) rồi thay trên thân gốc.
 //
-// Các khoảng khớp được gộp (hợp) rồi mới thay, nên hai giá trị chồng lấn không để lọt phần nào.
+// Luật (PII):
+//   - Giá trị trọn — tên đầy đủ (≥ 2 chữ), email, địa chỉ nguyên vẹn (các dòng nối kiểu nào cũng được), giá trị khác
+//     ≥ 4 ký tự: so CHUỖI CON.
+//   - Thành phần địa chỉ (tách theo dòng, "," và " - "): che riêng, trọn từ, khi dài ≥ 12 ký tự hoặc có chữ số.
+//   - Điện thoại (giá trị chỉ gồm chữ số và + - . ( ) dấu cách, 8–15 chữ số): theo nhóm chữ số, dấu phân cách
+//     ". ( ) -" và dấu cách xen giữa, đầu 0 / 84 / +84 / 0084 / (+84) / +84(0); không bao giờ cắt giữa một nhóm số.
+//   - Chữ của tên: chữ MẠNH (có dấu, ≥ 2 ký tự) bị che khi đứng thành từ riêng ở dạng CÓ DẤU. Chữ YẾU (dạng bỏ dấu
+//     của chữ mạnh, chữ vốn không dấu) chỉ bị che khi (a1) đứng liền một chữ khác của tên (cách bởi dấu cách, "+",
+//     "%20", ",", "-", ".", "_"), hoặc (a2) là toàn bộ giá trị của một trường có tên gợi ý người (JSON "k":"v",
+//     form k=v, XML <k>v</k>) và mọi chữ của giá trị là chữ của tên khách. Trường có tên gợi ý địa chỉ mà giá trị là
+//     một thành phần địa chỉ của khách cũng bị che.
+//   - Thẻ (Cards): 13–19 chữ số (liền hoặc nhóm cách bởi MỘT dấu cách/gạch), không dính chữ/số/"_", qua Luhn, và
+//     khớp dải đầu số × độ dài của các mạng thẻ phổ biến; mã đã biết của lời gọi (PII.Keep) không bao giờ là thẻ.
+//     Giá trị của trường cvv/cvc/cvn/card_cvv/security_code (JSON, form, XML) thành Mask.
 //
-// Giới hạn: không bắt được chuẩn hoá Unicode NFD, viết tắt, base64, mã hoá ba lần trở lên, chữ của tên đã bỏ
-// dấu khi đứng tách riêng, điện thoại nằm trong dãy chữ-số dài hơn chỉ khi có số kề, và giá trị bị cắt đôi ở
-// mép thân đã cắt.
+// Giới hạn: xem README của conformance (mục LOG-1) và báo cáo Task 6.
 package redact
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"net/url"
-	"regexp"
-	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -40,45 +36,46 @@ const Mask = "[REDACTED]"
 // MinValueRunes: giá trị trọn ngắn hơn (sau khi cắt khoảng trắng) bị bỏ qua để không phá nát thân.
 const MinValueRunes = 4
 
-// MinWordRunes: chữ tách từ tên ngắn hơn bị bỏ qua.
+// MinWordRunes: chữ của tên ngắn hơn bị bỏ qua.
 const MinWordRunes = 2
 
-// MinLineRunes: dòng của giá trị nhiều dòng chỉ được che riêng khi dài ít nhất chừng này; dòng ngắn hơn ("Quận 1",
-// "Hà Nội") chỉ bị che như một phần của giá trị trọn, để không che thừa mọi thân có các chữ đó.
+// MinLineRunes: thành phần địa chỉ không có chữ số chỉ được che riêng khi dài ít nhất chừng này ("Hà Nội" thì không).
 const MinLineRunes = 12
 
-// PII là dữ liệu cá nhân cần che: Values so chuỗi con, Words so trọn từ.
+// PII là dữ liệu cá nhân cần che.
 type PII struct {
-	Values []string
-	Words  []string
+	Names     []string // tên người: giá trị trọn (khi ≥ 2 chữ) và từng chữ (mạnh/yếu)
+	Addresses []string // địa chỉ: giá trị trọn và các thành phần
+	Values    []string // giá trị trọn khác (email, điện thoại...); giá trị nhiều dòng được coi như địa chỉ
+	Keep      []string // mã đã biết của lời gọi (mã giao dịch, mã đối tác, khoá idempotency...): không bao giờ là thẻ
 }
 
-// Customer dựng PII của một khách: tên, email, điện thoại, địa chỉ là giá trị trọn; từng chữ của tên (khi tên
-// có nhiều chữ) là Words, vì đối tác hay tách họ và tên.
+// Customer dựng PII của một khách.
 func Customer(name, email, phone, address string) PII {
-	p := PII{Values: []string{name, email, phone, address}}
-	if f := strings.Fields(name); len(f) > 1 {
-		p.Words = f
-	}
-	return p
+	return PII{Names: []string{name}, Values: []string{email, phone}, Addresses: []string{address}}
 }
 
-// String che cả hai lớp với values là giá trị trọn.
+// String che mọi lớp với values là giá trị trọn.
 func String(s string, values ...string) string { return New(values...).String(s) }
 
 // Values chỉ che giá trị trọn (không che thẻ). Byte không phải UTF-8 ngoài chỗ khớp giữ nguyên.
 func Values(s string, values ...string) string { return New(values...).values(s) }
 
-// Contains báo s còn chứa một dạng nào của values (cùng cách so với Values).
+// Contains báo s còn chứa một dạng nào của values.
 func Contains(s string, values ...string) bool { return New(values...).Contains(s) }
 
-// Redactor là bộ che đã dựng sẵn cho một PII (dựng biểu thức một lần). nil không che giá trị nào, chỉ che thẻ.
-// Không bao giờ panic vì đầu vào.
+type wordInfo struct{ strong string } // strong: dạng có dấu (chữ thường) khi chữ là chữ mạnh, rỗng nếu yếu
+
+// Redactor là bộ che đã dựng sẵn; dựng một lần cho mỗi lệnh rồi dùng cho mọi văn bản của lệnh đó. nil chỉ che thẻ.
+// An toàn khi dùng đồng thời; không bao giờ panic vì đầu vào.
 type Redactor struct {
-	full  *regexp.Regexp // giá trị trọn, chuỗi con
-	words *regexp.Regexp // chữ của tên, trọn từ
-	phone *regexp.Regexp // số điện thoại, không kề chữ số
-	lit   []string       // dạng byte gốc (giá trị không phải UTF-8, hoặc khi biểu thức không dựng được), so đúng byte
+	full   []string            // chuỗi con
+	comps  []string            // thành phần địa chỉ, trọn từ
+	addr   map[string]bool     // thành phần địa chỉ (cho trường gợi ý địa chỉ)
+	words  map[string]wordInfo // chữ của tên (đã chuẩn hoá, bỏ dấu)
+	phones map[string]bool     // dãy chữ số của điện thoại ở mọi đầu số
+	maxPh  int
+	keep   []string
 }
 
 // New dựng Redactor với values là giá trị trọn.
@@ -87,92 +84,121 @@ func New(values ...string) *Redactor { return NewPII(PII{Values: values}) }
 // NewPII dựng Redactor cho p.
 func NewPII(p PII) *Redactor {
 	r := &Redactor{}
-	full, words := map[string]bool{}, map[string]bool{}
-	var phones []string
-	for _, v := range p.Values {
-		v = r.valid(strings.TrimSpace(v))
-		if d, ok := phoneDigits(v); ok {
-			phones = append(phones, d)
-			continue
+	seen := map[string]bool{}
+	addFull := func(v string) {
+		if utf8.RuneCountInString(v) < MinValueRunes {
+			return
 		}
-		for _, b := range wholeForms(v) {
-			if utf8.RuneCountInString(b) < MinValueRunes {
+		n := normString(v, true)
+		if n != "" && !seen[n] {
+			seen[n] = true
+			r.full = append(r.full, n)
+		}
+	}
+	addAddress := func(a string) {
+		addFull(a)
+		for _, c := range components(a) {
+			n := normString(c, true)
+			if utf8.RuneCountInString(n) < MinWordRunes {
 				continue
 			}
-			addForms(full, b)
-			if f := fold(b); f != b {
-				addForms(full, f)
+			if r.addr == nil {
+				r.addr = map[string]bool{}
+			}
+			r.addr[n] = true
+			if utf8.RuneCountInString(c) >= MinValueRunes && (utf8.RuneCountInString(c) >= MinLineRunes || hasDigit(c)) {
+				r.comps = append(r.comps, n)
 			}
 		}
 	}
-	for _, w := range p.Words {
-		if w = r.valid(strings.TrimSpace(w)); utf8.RuneCountInString(w) >= MinWordRunes {
-			addForms(words, w)
+	for _, v := range p.Values {
+		v = strings.TrimSpace(v)
+		switch d, ok := phoneDigits(v); {
+		case ok:
+			r.addPhone(d)
+		case strings.ContainsAny(v, "\r\n"):
+			addAddress(v)
+		default:
+			addFull(v)
 		}
 	}
-	r.full = r.compile(full)
-	r.words = r.compile(words)
-	if len(phones) > 0 {
-		var alts []string
-		for _, d := range phones {
-			alts = append(alts, phonePattern(d))
+	for _, a := range p.Addresses {
+		addAddress(strings.TrimSpace(a))
+	}
+	for _, name := range p.Names {
+		f := strings.Fields(name)
+		if len(f) > 1 {
+			addFull(strings.Join(f, " "))
 		}
-		r.phone, _ = regexp.Compile("(?:" + strings.Join(alts, "|") + ")")
+		for _, w := range f {
+			fw := normString(w, true)
+			if utf8.RuneCountInString(fw) < MinWordRunes || strings.ContainsRune(fw, ' ') {
+				continue
+			}
+			if r.words == nil {
+				r.words = map[string]wordInfo{}
+			}
+			info := r.words[fw]
+			if lw := normString(w, false); lw != fw && info.strong == "" {
+				info.strong = lw
+			}
+			r.words[fw] = info
+		}
+	}
+	for _, k := range p.Keep {
+		if len(k) >= 6 {
+			r.keep = append(r.keep, k)
+		}
 	}
 	return r
 }
 
-// valid: giá trị không phải UTF-8 được giữ dạng byte gốc để so đúng byte, và đổi thành UTF-8 hợp lệ cho biểu thức.
-func (r *Redactor) valid(v string) string {
-	if utf8.ValidString(v) {
-		return v
+// WithKeep trả bản sao của r có thêm các mã không bao giờ bị coi là số thẻ (r nil: chỉ có mã).
+func (r *Redactor) WithKeep(codes ...string) *Redactor {
+	out := &Redactor{}
+	if r != nil {
+		*out = *r
+		out.keep = append([]string(nil), r.keep...)
 	}
-	if len(v) >= MinValueRunes {
-		r.lit = append(r.lit, v)
-	}
-	return strings.ToValidUTF8(v, "�")
-}
-
-// compile dựng một biểu thức không phân biệt hoa thường cho tập dạng, dài trước (luật leftmost-first). Không
-// dựng được (không xảy ra với chuỗi đã QuoteMeta) thì các dạng thành so đúng byte, không bao giờ panic.
-func (r *Redactor) compile(set map[string]bool) *regexp.Regexp {
-	if len(set) == 0 {
-		return nil
-	}
-	list := make([]string, 0, len(set))
-	for f := range set {
-		list = append(list, f)
-	}
-	sort.Slice(list, func(i, j int) bool {
-		if len(list[i]) != len(list[j]) {
-			return len(list[i]) > len(list[j])
+	for _, k := range codes {
+		if len(k) >= 6 {
+			out.keep = append(out.keep, k)
 		}
-		return list[i] < list[j]
-	})
-	quoted := make([]string, len(list))
-	for i, f := range list {
-		quoted[i] = regexp.QuoteMeta(f)
 	}
-	re, err := regexp.Compile("(?i)(?:" + strings.Join(quoted, "|") + ")")
-	if err != nil {
-		r.lit = append(r.lit, list...)
-		return nil
-	}
-	return re
+	return out
 }
 
-// String che giá trị của r rồi che thẻ.
-func (r *Redactor) String(s string) string { return Cards(r.values(s)) }
+// String che dữ liệu khách của r rồi che thẻ.
+func (r *Redactor) String(s string) string {
+	var keep []string
+	if r != nil {
+		keep = r.keep
+	}
+	return cards(r.values(s), keep)
+}
 
-// Contains báo s còn chứa một dạng nào của PII của r.
-func (r *Redactor) Contains(s string) bool { return len(r.spans(s, true)) > 0 }
+// Contains báo s còn chứa một dạng nào của dữ liệu khách của r (không xét thẻ).
+func (r *Redactor) Contains(s string) bool {
+	if r.empty() || s == "" {
+		return false
+	}
+	return len(r.spans(s)) > 0
+}
+
+func (r *Redactor) empty() bool {
+	return r == nil || (len(r.full) == 0 && len(r.comps) == 0 && len(r.words) == 0 && len(r.phones) == 0 && len(r.addr) == 0)
+}
 
 func (r *Redactor) values(s string) string {
-	sp := r.spans(s, false)
+	if r.empty() || s == "" {
+		return s
+	}
+	sp := r.spans(s)
 	if len(sp) == 0 {
 		return s
 	}
 	var b strings.Builder
+	b.Grow(len(s))
 	last := 0
 	for _, x := range sp {
 		b.WriteString(s[last:x[0]])
@@ -183,136 +209,340 @@ func (r *Redactor) values(s string) string {
 	return b.String()
 }
 
-// spans trả các khoảng cần che, đã gộp (hợp các khoảng chồng lấn hoặc kề nhau); first: dừng ở khoảng đầu tiên.
-func (r *Redactor) spans(s string, first bool) [][2]int {
-	if r == nil || s == "" {
-		return nil
-	}
+// spans trả các khoảng (byte của s) cần che, đã gộp.
+func (r *Redactor) spans(s string) [][2]int {
+	n := normalize(s, true)
+	t := string(n.b)
 	var out [][2]int
-	add := func(i, j int) bool { out = append(out, [2]int{i, j}); return first }
-	if scan(s, r.full, nil, add) || scan(s, r.words, wordBoundary, add) || scan(s, r.phone, digitBoundary, add) {
-		return out
+	add := func(i, j int) {
+		if j > i {
+			out = append(out, [2]int{int(n.pos[i]), int(n.pos[j])})
+		}
 	}
-	for _, l := range r.lit {
-		for i := 0; i <= len(s)-len(l); {
-			k := strings.Index(s[i:], l)
-			if k < 0 {
+	for _, p := range r.full {
+		for k := 0; k <= len(t)-len(p); {
+			x := strings.Index(t[k:], p)
+			if x < 0 {
 				break
 			}
-			if add(i+k, i+k+len(l)) {
-				return out
-			}
-			i += k + 1
+			add(k+x, k+x+len(p))
+			k += x + 1
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
-	merged := out[:0]
-	for _, x := range out {
-		if n := len(merged); n > 0 && x[0] <= merged[n-1][1] {
-			merged[n-1][1] = max(merged[n-1][1], x[1])
+	for _, p := range r.comps {
+		for k := 0; k <= len(t)-len(p); {
+			x := strings.Index(t[k:], p)
+			if x < 0 {
+				break
+			}
+			if i, j := k+x, k+x+len(p); (i == 0 || !isWordByte(t[i-1])) && (j == len(t) || !isWordByte(t[j])) {
+				add(i, j)
+			}
+			k += x + 1
+		}
+	}
+	if len(r.phones) > 0 {
+		r.phoneSpans(t, add)
+	}
+	if len(r.words) > 0 {
+		r.wordSpans(s, n, t, add)
+	}
+	if len(r.words) > 0 || len(r.addr) > 0 {
+		r.fieldSpans(s, n, t, add)
+	}
+	return merge(out)
+}
+
+func merge(out [][2]int) [][2]int {
+	if len(out) < 2 {
+		return out
+	}
+	// Sắp xếp chèn: số khoảng thường rất nhỏ.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j][0] < out[j-1][0]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	m := out[:1]
+	for _, x := range out[1:] {
+		if l := &m[len(m)-1]; x[0] <= l[1] {
+			l[1] = max(l[1], x[1])
 			continue
 		}
-		merged = append(merged, x)
+		m = append(m, x)
 	}
-	return merged
+	return m
 }
 
-// scan tìm mọi khớp của re (kể cả khớp chồng lấn: lần tìm sau bắt đầu ngay sau điểm đầu của khớp trước), giữ khớp
-// qua ok; add trả true để dừng. Trả true khi đã dừng.
-func scan(s string, re *regexp.Regexp, ok func(s string, i, j int) bool, add func(i, j int) bool) bool {
-	if re == nil {
+// ---- Chữ của tên ----
+
+type token struct{ i, j int }
+
+// wordSpans: chữ mạnh đứng riêng (dạng có dấu) và chuỗi ≥ 2 chữ của tên đứng liền nhau (luật a1).
+func (r *Redactor) wordSpans(s string, n ntext, t string, add func(i, j int)) {
+	var run []token
+	flush := func() {
+		if len(run) >= 2 {
+			add(run[0].i, run[len(run)-1].j)
+		}
+		run = run[:0]
+	}
+	prevEnd := -1
+	for i := 0; i < len(t); {
+		if !isWordByte(t[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(t) && isWordByte(t[j]) {
+			j++
+		}
+		info, isName := r.words[t[i:j]]
+		switch {
+		case !isName:
+			flush()
+		default:
+			if info.strong != "" && normString(s[n.pos[i]:n.pos[j]], false) == info.strong {
+				add(i, j)
+			}
+			if len(run) > 0 && !joinable(t[prevEnd:i]) {
+				flush()
+			}
+			run = append(run, token{i, j})
+		}
+		prevEnd, i = j, j
+	}
+	flush()
+}
+
+// joinable: khoảng giữa hai chữ chỉ gồm dấu cách, "-", ".", "_" (đã chuẩn hoá: "+", "%20", "," thành dấu cách), tối đa 3.
+func joinable(gap string) bool {
+	if gap == "" || len(gap) > 3 {
 		return false
 	}
-	for pos := 0; pos < len(s); {
-		loc := re.FindStringIndex(s[pos:])
-		if loc == nil {
-			return false
-		}
-		i, j := pos+loc[0], pos+loc[1]
-		if j > i && (ok == nil || ok(s, i, j)) && add(i, j) {
-			return true
-		}
-		_, size := utf8.DecodeRuneInString(s[i:])
-		pos = i + max(size, 1)
-	}
-	return false
-}
-
-// wholeForms: giá trị một dòng là chính nó; giá trị nhiều dòng là bản nối các dòng bằng \n, \r\n, dấu cách,
-// ", " và "," cùng từng dòng đủ dài (MinLineRunes).
-func wholeForms(v string) []string {
-	if !strings.ContainsAny(v, "\r\n") {
-		return []string{v}
-	}
-	var lines []string
-	for _, l := range strings.FieldsFunc(v, func(r rune) bool { return r == '\r' || r == '\n' }) {
-		if l = strings.TrimSpace(l); l != "" {
-			lines = append(lines, l)
-		}
-	}
-	out := []string{v}
-	for _, sep := range []string{"\n", "\r\n", " ", ", ", ","} {
-		out = append(out, strings.Join(lines, sep))
-	}
-	for _, l := range lines {
-		if utf8.RuneCountInString(l) >= MinLineRunes {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
-// isWordRune: chữ, số Unicode và "_" (để amount_long, test_mode, order_code không bị coi là chứa từ riêng).
-func isWordRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
-
-// wordBoundary: trước và sau khớp không phải ký tự của từ. Ký tự ASCII không phải chữ/số được mã hoá (%20,  )
-// cũng là ranh giới. Chữ đứng trần sau ":" hay "," (true/false/null của JSON) không tính là từ của khách.
-func wordBoundary(s string, i, j int) bool {
-	if i > 0 {
-		prev, _ := utf8.DecodeLastRuneInString(s[:i])
-		if isWordRune(prev) && !encodedSeparatorBefore(s, i) {
-			return false
-		}
-	}
-	if j < len(s) {
-		next, _ := utf8.DecodeRuneInString(s[j:])
-		if isWordRune(next) {
-			return false
-		}
-	}
-	switch strings.ToLower(s[i:j]) {
-	case "true", "false", "null":
-		k := i
-		for k > 0 && (s[k-1] == ' ' || s[k-1] == '\t') {
-			k--
-		}
-		if k == 0 || s[k-1] != '"' {
+	for i := 0; i < len(gap); i++ {
+		switch gap[i] {
+		case ' ', '-', '.', '_':
+		default:
 			return false
 		}
 	}
 	return true
 }
 
-// encodedSeparatorBefore: ngay trước i là %HH hoặc \uXXXX mã hoá một ký tự không phải chữ/số/"_".
-func encodedSeparatorBefore(s string, i int) bool {
-	if i >= 3 && s[i-3] == '%' {
-		var b int
-		if _, err := fmt.Sscanf(s[i-2:i], "%02x", &b); err == nil && b < utf8.RuneSelf && !isWordRune(rune(b)) {
-			return true
-		}
+// ---- Trường gợi ý người / địa chỉ (luật a2) ----
+
+var personKeys = setOf("name", "fullname", "full", "first", "last", "middle", "given", "family", "surname", "holder",
+	"cardholder", "account", "accountname", "ho", "ten", "dem", "hoten", "customer", "payer", "buyer", "receiver",
+	"recipient", "beneficiary", "contact", "owner", "billing", "shipping", "user", "username")
+
+var addressKeys = setOf("address", "addr", "street", "ward", "district", "city", "province", "phuong", "quan", "huyen",
+	"tinh", "diachi")
+
+func setOf(ws ...string) map[string]bool {
+	m := make(map[string]bool, len(ws))
+	for _, w := range ws {
+		m[w] = true
 	}
-	if i >= 6 && s[i-6] == '\\' && (s[i-5] == 'u' || s[i-5] == 'U') {
-		var c int
-		if _, err := fmt.Sscanf(s[i-4:i], "%04x", &c); err == nil && !isWordRune(rune(c)) {
-			return true
-		}
-	}
-	return false
+	return m
 }
 
-// digitBoundary: không có chữ số ASCII kề hai bên (không cắt giữa một dãy số dài hơn).
-func digitBoundary(s string, i, j int) bool {
-	return (i == 0 || !isDigit(s[i-1])) && (j == len(s) || !isDigit(s[j]))
+const maxKey, maxFieldValue = 64, 256
+
+// fieldSpans tìm các trường JSON "k":"v", form k=v và XML <k>v</k> trên bản chuẩn hoá.
+func (r *Redactor) fieldSpans(s string, n ntext, t string, add func(i, j int)) {
+	for i := 0; i < len(t); i++ {
+		switch t[i] {
+		case ':':
+			j := i - 1
+			for j >= 0 && t[j] == ' ' {
+				j--
+			}
+			if j < 1 || t[j] != '"' {
+				continue
+			}
+			ks := strings.LastIndexByte(t[max(0, j-maxKey):j], '"')
+			if ks < 0 {
+				continue
+			}
+			ks += max(0, j-maxKey) + 1
+			m := i + 1
+			for m < len(t) && t[m] == ' ' {
+				m++
+			}
+			if m >= len(t) || t[m] != '"' {
+				continue
+			}
+			ve := strings.IndexByte(t[m+1:min(len(t), m+1+maxFieldValue)], '"')
+			if ve < 0 {
+				continue
+			}
+			r.field(s, n, t, ks, j, m+1, m+1+ve, add)
+		case '=':
+			ks := i
+			for ks > 0 && i-ks < maxKey && !strings.ContainsRune("&?; \"'<>", rune(t[ks-1])) {
+				ks--
+			}
+			ve := i + 1
+			for ve < len(t) && ve-i <= maxFieldValue && !strings.ContainsRune("&;\"<", rune(t[ve])) {
+				ve++
+			}
+			r.field(s, n, t, ks, i, i+1, ve, add)
+		case '<':
+			if i+1 >= len(t) || t[i+1] == '/' {
+				continue
+			}
+			ke := strings.IndexByte(t[i+1:min(len(t), i+1+maxKey)], '>')
+			if ke < 0 {
+				continue
+			}
+			ke += i + 1
+			vs := ke + 1
+			ve := strings.IndexByte(t[vs:min(len(t), vs+maxFieldValue)], '<')
+			if ve < 0 || vs+ve+1 >= len(t) || t[vs+ve+1] != '/' {
+				continue
+			}
+			r.field(s, n, t, i+1, ke, vs, vs+ve, add)
+		}
+	}
+}
+
+// field che giá trị [vs,ve) khi khoá [ks,ke) gợi ý người (mọi chữ của giá trị là chữ của tên) hoặc địa chỉ (giá trị
+// là một thành phần địa chỉ của khách).
+func (r *Redactor) field(s string, n ntext, t string, ks, ke, vs, ve int, add func(i, j int)) {
+	for vs < ve && t[vs] == ' ' {
+		vs++
+	}
+	for ve > vs && t[ve-1] == ' ' {
+		ve--
+	}
+	if ve <= vs || ke <= ks {
+		return
+	}
+	person, address := keyKind(s[n.pos[ks]:n.pos[ke]])
+	v := t[vs:ve]
+	switch {
+	case person && len(r.words) > 0 && allNameWords(v, r.words):
+		add(vs, ve)
+	case address && r.addr[v]:
+		add(vs, ve)
+	}
+}
+
+func allNameWords(v string, words map[string]wordInfo) bool {
+	found := false
+	for _, w := range strings.FieldsFunc(v, func(c rune) bool { return c == ' ' || c == '-' || c == '.' || c == '_' }) {
+		if _, ok := words[w]; !ok {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+// keyKind tách khoá theo "_", "-", ".", camelCase (trên khoá gốc) và so với danh sách khoá gợi ý người/địa chỉ.
+func keyKind(key string) (person, address bool) {
+	var whole strings.Builder
+	check := func(w string) {
+		w = strings.ToLower(w)
+		person = person || personKeys[w]
+		address = address || addressKeys[w]
+	}
+	start := 0
+	runes := []rune(key)
+	for i, c := range runes {
+		if c < utf8.RuneSelf && (unicode.IsLetter(c) || unicode.IsDigit(c)) {
+			whole.WriteRune(unicode.ToLower(c))
+		}
+		switch {
+		case !(unicode.IsLetter(c) || unicode.IsDigit(c)):
+			if i > start {
+				check(string(runes[start:i]))
+			}
+			start = i + 1
+		case unicode.IsUpper(c) && i > start && unicode.IsLower(runes[i-1]):
+			check(string(runes[start:i]))
+			start = i
+		}
+	}
+	if len(runes) > start {
+		check(string(runes[start:]))
+	}
+	check(whole.String())
+	return person, address
+}
+
+// ---- Điện thoại ----
+
+func (r *Redactor) addPhone(d string) {
+	if r.phones == nil {
+		r.phones = map[string]bool{}
+	}
+	add := func(x string) {
+		r.phones[x] = true
+		r.maxPh = max(r.maxPh, len(x))
+	}
+	nat := ""
+	switch {
+	case strings.HasPrefix(d, "84") && len(d) >= 10:
+		nat = d[2:]
+	case strings.HasPrefix(d, "0") && len(d) >= 9:
+		nat = d[1:]
+	default:
+		add(d)
+		return
+	}
+	nat = strings.TrimPrefix(nat, "0")
+	for _, p := range []string{"", "0", "84", "840", "0084", "00840"} {
+		add(p + nat)
+	}
+}
+
+// phoneSpans: ghép các nhóm chữ số liền nhau (cách bởi tối đa 4 ký tự trong ". ( ) -" và dấu cách), bắt đầu và kết
+// thúc ở ranh giới nhóm, rồi so với các dãy của điện thoại.
+func (r *Redactor) phoneSpans(t string, add func(i, j int)) {
+	type group struct{ i, j int }
+	var groups []group
+	for i := 0; i < len(t); {
+		if !isDigit(t[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(t) && isDigit(t[j]) {
+			j++
+		}
+		groups = append(groups, group{i, j})
+		i = j
+	}
+	var buf []byte
+	for a := range groups {
+		buf = buf[:0]
+		for b := a; b < len(groups); b++ {
+			if b > a && !phoneGap(t[groups[b-1].j:groups[b].i]) {
+				break
+			}
+			buf = append(buf, t[groups[b].i:groups[b].j]...)
+			if len(buf) > r.maxPh {
+				break
+			}
+			if r.phones[string(buf)] {
+				add(groups[a].i, groups[b].j)
+			}
+		}
+	}
+}
+
+func phoneGap(g string) bool {
+	if g == "" || len(g) > 4 {
+		return false
+	}
+	for i := 0; i < len(g); i++ {
+		if !strings.ContainsRune(" .()-", rune(g[i])) {
+			return false
+		}
+	}
+	return true
 }
 
 // phoneDigits: v chỉ gồm chữ số và + - . ( ) khoảng trắng, có 8–15 chữ số → các chữ số của nó.
@@ -331,202 +561,28 @@ func phoneDigits(v string) (string, bool) {
 	return d, len(d) >= 8 && len(d) <= 15
 }
 
-const (
-	phoneSep  = `(?:[\s.()\-]|\+|%20)*`
-	phonePlus = `(?:\+|%2[bB]|\\u002[bB]|00)`
-)
+// ---- Địa chỉ ----
 
-// phonePattern: các chữ số quốc gia (bỏ 84 hoặc 0 đầu) với dấu phân cách xen giữa, sau một đầu tuỳ chọn
-// 0 / 84 / +84 / (+84) / +84(0); số không theo dạng Việt Nam chỉ có "+" tuỳ chọn ở đầu.
-func phonePattern(d string) string {
-	n, prefix := d, `(?:`+phonePlus+`[\s(]*)?`
-	switch {
-	case strings.HasPrefix(d, "84") && len(d) >= 10:
-		n = d[2:]
-	case strings.HasPrefix(d, "0") && len(d) >= 9:
-		n = d[1:]
-	default:
-		return prefix + interleave(n)
-	}
-	n = strings.TrimPrefix(n, "0")
-	prefix = `(?:(?:` + phonePlus + `?[\s(]*84[\s.()\-]*0?` + `|0)` + phoneSep + `)?`
-	return prefix + interleave(n)
-}
-
-func interleave(digits string) string {
-	parts := strings.Split(digits, "")
-	return strings.Join(parts, phoneSep)
-}
-
-// addForms thêm mọi dạng mã hoá của v có thể nằm trong thân request/response hay câu lỗi.
-func addForms(set map[string]bool, v string) {
-	std, _ := json.Marshal(v)
-	var noHTML bytes.Buffer
-	enc := json.NewEncoder(&noHTML)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
-	plain := unquote(noHTML.Bytes())
-	jsonForms := []string{unquote(std), plain, asciiJSON(plain)}
-	for _, f := range jsonForms[:3] {
-		if strings.Contains(f, "/") {
-			jsonForms = append(jsonForms, strings.ReplaceAll(f, "/", `\/`))
-		}
-	}
-	for _, f := range jsonForms {
-		set[f] = true
-		if strings.Contains(f, `\`) {
-			set[strings.ReplaceAll(f, `\`, `\\`)] = true // JSON lồng hai lần
-		}
-	}
-	set[v] = true
-	set[url.QueryEscape(v)] = true
-	set[url.PathEscape(v)] = true
-}
-
-func unquote(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	return strings.TrimSuffix(strings.TrimPrefix(s, `"`), `"`)
-}
-
-// asciiJSON đổi mọi ký tự ngoài ASCII của chuỗi JSON đã escape thành \uXXXX (cặp thay thế cho ký tự ngoài BMP).
-func asciiJSON(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r < utf8.RuneSelf:
-			b.WriteRune(r)
-		case r > 0xFFFF:
-			r -= 0x10000
-			fmt.Fprintf(&b, `\u%04x\u%04x`, 0xD800+(r>>10), 0xDC00+(r&0x3FF))
-		default:
-			fmt.Fprintf(&b, `\u%04x`, r)
-		}
-	}
-	return b.String()
-}
-
-// vietFold: chữ có dấu tiếng Việt (dựng sẵn) → chữ không dấu.
-var vietFold = func() map[rune]rune {
-	m := map[rune]rune{'đ': 'd', 'Đ': 'D'}
-	for base, letters := range map[rune]string{
-		'a': "àáạảãâầấậẩẫăằắặẳẵ", 'e': "èéẹẻẽêềếệểễ", 'i': "ìíịỉĩ",
-		'o': "òóọỏõôồốộổỗơờớợởỡ", 'u': "ùúụủũưừứựửữ", 'y': "ỳýỵỷỹ",
-	} {
-		for _, r := range letters {
-			m[r] = base
-			m[unicode.ToUpper(r)] = unicode.ToUpper(base)
-		}
-	}
-	return m
-}()
-
-// Fold bỏ dấu tiếng Việt (Đ→D, ă/â/ê/ô/ơ/ư và mọi dấu thanh; cả dấu kết hợp U+0300–U+036F đứng rời).
-func Fold(s string) string { return fold(s) }
-
-func fold(s string) string {
-	return strings.Map(func(r rune) rune {
-		if f, ok := vietFold[r]; ok {
-			return f
-		}
-		if r >= 0x300 && r <= 0x36F {
-			return -1
-		}
-		return r
-	}, s)
-}
-
-// Trường mã bảo mật của thẻ: tên đúng nguyên (không phân biệt hoa thường), không khớp tên dài hơn chứa nó.
-const securityFields = `cvv|cvc|cvn|card_cvv|security_code`
-
-var (
-	jsonSecurity = regexp.MustCompile(`(?i)("(?:` + securityFields + `)"\s*:\s*)("(?:[^"\\]|\\.)*"|-?[0-9]+)`)
-	formSecurity = regexp.MustCompile(`(?i)(^|[&?;\s])((?:` + securityFields + `)=)[^&;\s]*`)
-	xmlSecurity  = regexp.MustCompile(`(?i)(<(?:` + securityFields + `)>)[^<]*(</(?:` + securityFields + `)>)`)
-)
-
-// Cards che số thẻ và giá trị mã bảo mật. Luật số thẻ: 13–19 chữ số liền nhau hoặc chia nhóm bởi MỘT dấu cách
-// hay gạch, không dính chữ/số/"_" ở hai đầu (không nằm trong một dãy chữ-số dài hơn), qua Luhn, và đầu số 2–6
-// (Visa, Mastercard, Amex, JCB, Discover, UnionPay...) hoặc 9704 (thẻ nội địa). Che giữ 6 số đầu và 4 số cuối,
-// dấu phân cách giữ nguyên.
-func Cards(s string) string {
-	s = maskPANs(s)
-	s = jsonSecurity.ReplaceAllString(s, `${1}"`+Mask+`"`)
-	s = formSecurity.ReplaceAllString(s, `${1}${2}`+Mask)
-	return xmlSecurity.ReplaceAllString(s, `${1}`+Mask+`${2}`)
-}
-
-func maskPANs(s string) string {
-	var out []byte
-	for i := 0; i < len(s); {
-		if !isDigit(s[i]) {
-			i++
-			continue
-		}
-		// Một dãy: chữ số, và dấu cách/gạch đơn lẻ nằm giữa hai chữ số.
-		j, digits := i, make([]byte, 0, 24)
-		for j < len(s) {
-			if isDigit(s[j]) {
-				digits = append(digits, s[j])
-				j++
-				continue
-			}
-			if (s[j] == ' ' || s[j] == '-') && j+1 < len(s) && isDigit(s[j+1]) {
-				j++
-				continue
-			}
-			break
-		}
-		before := i == 0 || !isWordByte(s, i, true)
-		after := j == len(s) || !isWordByte(s, j, false)
-		if n := len(digits); before && after && n >= 13 && n <= 19 && cardPrefix(digits) && luhn(string(digits)) {
-			if out == nil {
-				out = []byte(s)
-			}
-			k := 0
-			for p := i; p < j; p++ {
-				if isDigit(s[p]) {
-					if k >= 6 && k < n-4 {
-						out[p] = '*'
-					}
-					k++
+// components tách địa chỉ theo dòng, rồi mỗi dòng theo "," và " - ".
+func components(a string) []string {
+	var out []string
+	for _, line := range strings.FieldsFunc(a, func(c rune) bool { return c == '\n' || c == '\r' }) {
+		for _, part := range strings.Split(line, ",") {
+			for _, c := range strings.Split(part, " - ") {
+				if c = strings.TrimSpace(c); c != "" {
+					out = append(out, c)
 				}
 			}
 		}
-		i = j
 	}
-	if out == nil {
-		return s
-	}
-	return string(out)
+	return out
 }
 
-// isWordByte: ký tự ngay trước (before) hoặc tại vị trí i là chữ, số hay "_".
-func isWordByte(s string, i int, before bool) bool {
-	var r rune
-	if before {
-		r, _ = utf8.DecodeLastRuneInString(s[:i])
-	} else {
-		r, _ = utf8.DecodeRuneInString(s[i:])
-	}
-	return isWordRune(r)
-}
-
-func cardPrefix(d []byte) bool {
-	return (d[0] >= '2' && d[0] <= '6') || bytes.HasPrefix(d, []byte("9704"))
-}
+func hasDigit(s string) bool { return strings.ContainsAny(s, "0123456789") }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
-func luhn(d string) bool {
-	sum := 0
-	for i := len(d) - 1; i >= 0; i-- {
-		n := int(d[i] - '0')
-		if (len(d)-i)%2 == 0 {
-			if n *= 2; n > 9 {
-				n -= 9
-			}
-		}
-		sum += n
-	}
-	return sum%10 == 0
+// isWordByte (trên bản chuẩn hoá): chữ/số ASCII hoặc byte của ký tự ngoài ASCII.
+func isWordByte(c byte) bool {
+	return c >= utf8.RuneSelf || isDigit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

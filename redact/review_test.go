@@ -78,7 +78,7 @@ func TestValues_InvalidUTF8ValueNoPanic(t *testing.T) {
 	if redact.Contains("x Canary\xffname y", "\xff\xfe\xfd\xfc") {
 		t.Error("không có giá trị đó")
 	}
-	_ = redact.NewPII(redact.PII{Words: []string{"\xff\xfe"}}).String("abc")
+	_ = redact.NewPII(redact.PII{Names: []string{"\xff\xfe Ab\xff"}}).String("abc")
 }
 
 // Điện thoại có dấu phân cách trong thân; không cắt giữa một dãy số dài hơn.
@@ -117,8 +117,13 @@ func TestValues_EscapeCaseAndDoubleJSON(t *testing.T) {
 // Dòng địa chỉ ngắn (< 12 ký tự) không bị che riêng; chỉ che trong giá trị trọn, kể cả khi \n bị thay.
 func TestValues_ShortAddressLines(t *testing.T) {
 	const a = "12 Đường Canarystreet\nQuận 1\nHà Nội"
-	if got := redact.Values(`{"city":"Hà Nội","district":"Quận 1"}`, a); got != `{"city":"Hà Nội","district":"Quận 1"}` {
-		t.Errorf("dòng ngắn bị che riêng: %q", got)
+	// Thành phần không có chữ số và < 12 ký tự ("Hà Nội") không bị che riêng ở trường thường; có chữ số ("Quận 1")
+	// thì bị che; ở trường gợi ý địa chỉ (city) thì thành phần nào cũng bị che.
+	if got := redact.Values(`{"note":"Hà Nội","memo":"Quận 1"}`, a); got != `{"note":"Hà Nội","memo":"[REDACTED]"}` {
+		t.Errorf("thành phần ngắn: %q", got)
+	}
+	if got := redact.Values(`{"city":"Ha Noi"}`, a); got != `{"city":"[REDACTED]"}` {
+		t.Errorf("trường địa chỉ: %q", got)
 	}
 	for _, body := range []string{"12 Đường Canarystreet Quận 1 Hà Nội", "12 Đường Canarystreet, Quận 1, Hà Nội",
 		`12 Đường Canarystreet\nQuận 1\nHà Nội`, "12+%C4%90%C6%B0%E1%BB%9Dng+Canarystreet%0AQu%E1%BA%ADn+1%0AH%C3%A0+N%E1%BB%99i"} {
@@ -146,7 +151,7 @@ func TestCards_GroupsAndFalsePositives(t *testing.T) {
 	}
 }
 
-// Tỉ lệ che nhầm trên mã tham chiếu 15–16 số ngẫu nhiên: Luhn (~1/10) × đầu số trong dải (~5/10) ≈ 5%.
+// Tỉ lệ che nhầm trên mã tham chiếu 15–16 số ngẫu nhiên: Luhn (~1/10) × dải đầu số theo độ dài (≈ 2% với 15 số, ≈ 23% với 16 số) ≈ 1,3%.
 func TestCards_FalsePositiveRateOnRandomRefs(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	hit := 0
@@ -161,7 +166,7 @@ func TestCards_FalsePositiveRateOnRandomRefs(t *testing.T) {
 			hit++
 		}
 	}
-	if hit > n*7/100 {
-		t.Errorf("che nhầm %d/%d mã ngẫu nhiên, muốn ≤ 7%%", hit, n)
+	if hit > n*3/100 {
+		t.Errorf("che nhầm %d/%d mã ngẫu nhiên, muốn ≤ 3%%", hit, n)
 	}
 }

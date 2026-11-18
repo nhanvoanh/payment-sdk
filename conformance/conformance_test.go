@@ -1399,7 +1399,8 @@ func TestCheck_RedactedRawPasses(t *testing.T) {
 		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
 			res, err := good(ctx, req)
 			c := req.Customer
-			res.Raw = connector.RawExchange{RequestBody: providerhttp.RedactCustomer(customerJSON(c), c)}
+			res.Raw = connector.RawExchange{RequestBody: providerhttp.RedactCustomer(customerJSON(c), c),
+				ResponseBody: providerhttp.RedactCustomer(splitEcho(c), c)}
 			return res, err
 		}
 		return f
@@ -1407,6 +1408,29 @@ func TestCheck_RedactedRawPasses(t *testing.T) {
 	if len(r.Findings) != 0 {
 		t.Fatalf("connector đã che không được có finding:%s", dump(r))
 	}
+}
+
+// splitEcho là phản hồi của đối tác tách họ/tên và bỏ dấu (tên chủ thẻ ASCII hoa, mỗi chữ một trường).
+func splitEcho(c paykit.Customer) string {
+	f := strings.Fields(strings.ToUpper(redact.Fold(c.Name)))
+	return `{"last":"` + f[0] + `","middle":"` + strings.Join(f[1:len(f)-1], " ") + `","first":"` + f[len(f)-1] +
+		`","holder":"` + strings.Join(f, " ") + `"}`
+}
+
+// Đối tác nhắc lại khách đã tách họ/tên bỏ dấu mà connector không che: LOG-1 bắt (cả qua gRPC).
+func TestCheck_Catches_SplitFoldedNameEcho(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnCreate
+		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			res, err := good(ctx, req)
+			f := strings.Fields(strings.ToUpper(redact.Fold(req.Customer.Name)))
+			res.Raw = connector.RawExchange{ResponseBody: `{"middle":"` + f[1] + `"}`}
+			return res, err
+		}
+		return f
+	}))
+	expectBoth(t, r, "LOG-1")
 }
 
 // Mã đơn phía đối tác dựng từ đồng hồ lúc gọi (nano giây, như một nonce) thay vì CreatedAt: ID-4 bắt, cả qua gRPC.
