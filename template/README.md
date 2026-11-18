@@ -75,7 +75,8 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 | 404 `not_found` khi truy vấn thanh toán hoặc hoàn tiền | `Found=false`, không lỗi | Core truy vấn cả giao dịch chưa tới được acme; lỗi ở đây khiến giao dịch không bao giờ đóng được. |
 | 5xx, 3xx, 4xx mã chưa ánh xạ hoặc không có mã | `ErrUnknownOutcome` | Acme (hoặc proxy giữa đường) đã trả lời nên có thể đã xử lý. Không bao giờ unavailable. |
 | 2xx với thân không hiểu được, thiếu trường, trạng thái lạ | `ErrUnknownOutcome` | Tiền có thể đã đi; không đoán "thất bại". |
-| Thiếu `ProviderRef` khi huỷ/hoàn (ta phát hiện trước khi gửi) | `ErrProviderUnavailable` | Chắc chắn chưa gửi gì. Acme chỉ huỷ theo `ProviderRef`, không theo `TransactionCode`: giao dịch chưa có `ProviderRef` (Create chưa trả lời) thì chưa huỷ được. |
+| Thiếu `ProviderRef` khi huỷ (ta phát hiện trước khi gửi) | `*connector.RejectedError{Code: "cannot_cancel"}`, không gọi mạng | Acme chỉ huỷ theo `ProviderRef`, không theo `TransactionCode`: giao dịch chưa có `ProviderRef` (Create chưa nghe được trả lời) thì biết chắc không huỷ được bằng thông tin được cho. Câu trả lời phải dứt khoát: với Rejected, core truy vấn lại rồi mới quyết (acme không biết giao dịch thì cho hết hạn; acme báo đã thu thì ghi đã trả). `ErrProviderUnavailable` ở đây làm core hiểu là "không rõ" và không bao giờ cho giao dịch hết hạn (luật `CXL-3`). |
+| Thiếu `ProviderRef` khi hoàn (ta phát hiện trước khi gửi) | `ErrProviderUnavailable` | Chắc chắn chưa gửi gì. |
 | Phản hồi tạo thanh toán có `order_code` khác mã đã gửi | `ErrUnknownOutcome` | Không tin phản hồi về giao dịch khác. |
 | Webhook sai chữ ký | `ErrInvalidSignature` | Kiểm trên byte thô trước khi đọc thân. |
 | Webhook loại không liên quan | `ErrEventNotRelevant` | Đã xác thực nhưng không có gì để áp. |
@@ -97,9 +98,9 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 
 Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã luật: `ID-1`..`ID-3` (tên, phương thức,
 khai năng lực), `PAY-1`..`PAY-7` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
-từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-3` (truy vấn), `CXL-1` (huỷ), `WHK-1`..`WHK-6`
-(webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`,
-`RFD-2` (hoàn tiền), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
+từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-4` (truy vấn), `CHG-1` (thu ngay), `CXL-1`..`CXL-3` (huỷ: không báo `canceled` khi
+đã thu, khi treo hay thân rác; trả lời dứt khoát khi thiếu `ProviderRef`), `WHK-1`..`WHK-6`
+(webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-3` (hoàn tiền), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
 
 ## Test
 

@@ -35,6 +35,7 @@ var rules = []rule{
 	{id: "CHG-1", op: connector.OpCharge, check: checkCHG1},
 	{id: "CXL-1", op: connector.OpCancel, check: checkCXL1},
 	{id: "CXL-2", op: connector.OpCancel, check: checkCXL2},
+	{id: "CXL-3", op: connector.OpCancel, check: checkCXL3},
 	{id: "WHK-1", op: connector.OpWebhook, check: checkWHK1},
 	{id: "WHK-2", op: connector.OpWebhook, check: checkWHK2},
 	{id: "WHK-3", op: connector.OpWebhook, check: checkWHK3},

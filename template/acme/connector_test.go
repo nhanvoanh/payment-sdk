@@ -419,6 +419,20 @@ func TestAcme_AlreadyPaidMeaningDependsOnOperation(t *testing.T) {
 	}
 }
 
+// Thiếu ProviderRef thì acme không huỷ được (chỉ huỷ theo payment_id): trả lời dứt khoát cannot_cancel,
+// không gọi mạng. Core sẽ truy vấn lại rồi mới quyết hết hạn hay không.
+func TestAcme_CancelWithoutProviderRefIsRejectedWithoutCall(t *testing.T) {
+	c, hits := stub(t, goodToken, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) })
+	_, err := c.CancelPayment(context.Background(), connector.CancelRequest{TransactionCode: "TNOREF", IdempotencyKey: "k"})
+	var rej *connector.RejectedError
+	if !errors.As(err, &rej) || rej.Code != "cannot_cancel" || errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) {
+		t.Fatalf("err = %v, cần đúng RejectedError{Code: cannot_cancel}", err)
+	}
+	if hits() != 0 {
+		t.Fatal("không được gọi acme khi thiếu ProviderRef")
+	}
+}
+
 func TestAcme_QueryNotFoundByCodeAnyHTTPStatus(t *testing.T) {
 	ctx := context.Background()
 	st, err := errorStub(t, 400, "not_found").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X"})

@@ -566,7 +566,7 @@ func TestCheck_SkipsUndeclaredOperations(t *testing.T) {
 	if len(r.Findings) != 0 {
 		t.Fatalf("thao tác không khai không được sinh finding:%s", dump(r))
 	}
-	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "QRY-4", "CHG-1", "CXL-1", "CXL-2",
+	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "QRY-4", "CHG-1", "CXL-1", "CXL-2", "CXL-3",
 		"WHK-1", "WHK-2", "WHK-3", "WHK-4", "WHK-5", "WHK-6", "RFD-1", "RFD-2", "RFD-3"}
 	for _, code := range want {
 		for _, c := range []string{code, code + "/grpc"} {
@@ -809,6 +809,61 @@ func TestCheck_Catches_CancelTimeoutClaimsCanceled(t *testing.T) {
 		return f
 	}))
 	expectBoth(t, r, "CXL-2")
+}
+
+// Connector chỉ huỷ được theo ProviderRef mà báo thiếu mã bằng ErrProviderUnavailable (hay "chưa rõ"):
+// core không bao giờ cho hết hạn giao dịch mà Create chưa nghe được trả lời.
+func TestCheck_Catches_CancelWithoutRefNotDefinite(t *testing.T) {
+	for name, bad := range map[string]error{
+		"unavailable": fmt.Errorf("%w: thiếu ProviderRef", connector.ErrProviderUnavailable),
+		"unknown":     fmt.Errorf("%w: thiếu ProviderRef", connector.ErrUnknownOutcome),
+		"lỗi thường":  errors.New("thiếu ProviderRef"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+				good := f.OnCancel
+				f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+					if req.ProviderRef == "" {
+						return connector.CancelResult{}, bad
+					}
+					return good(ctx, req)
+				}
+				return f
+			}))
+			expectBoth(t, r, "CXL-3")
+		})
+	}
+}
+
+// Các câu trả lời dứt khoát đều qua CXL-3.
+func TestCheck_CancelWithoutRefDefiniteAnswersPass(t *testing.T) {
+	for name, ans := range map[string]func() (connector.CancelResult, error){
+		"rejected": func() (connector.CancelResult, error) {
+			return connector.CancelResult{}, &connector.RejectedError{Code: "cannot_cancel"}
+		},
+		"not supported": func() (connector.CancelResult, error) { return connector.CancelResult{}, connector.ErrNotSupported },
+		"pending": func() (connector.CancelResult, error) {
+			return connector.CancelResult{Status: connector.StatusPending}, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+				good := f.OnCancel
+				f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+					if req.ProviderRef == "" {
+						return ans()
+					}
+					return good(ctx, req)
+				}
+				return f
+			}))
+			if slices.ContainsFunc(rules(r), func(s string) bool { return strings.HasPrefix(s, "CXL-3") }) {
+				t.Fatalf("CXL-3 bắn nhầm:%s", dump(r))
+			}
+		})
+	}
 }
 
 func TestCheck_Catches_CancelGarbageAsNotSupported(t *testing.T) {

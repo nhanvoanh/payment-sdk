@@ -423,6 +423,31 @@ func checkCXL2(e *env) {
 	}
 }
 
+// checkCXL3: core huỷ cả giao dịch mà Create chưa nghe được trả lời (không có ProviderRef, đối tác có thể không
+// biết). Connector phải trả lời dứt khoát; "chưa rõ" hay "không gọi được" thì core không bao giờ cho hết hạn.
+func checkCXL3(e *env) {
+	tx := e.tx()
+	e.p.SetMode(ModeNormal)
+	cn, _ := e.c.(connector.Canceler)
+	ctx, cancel := normalCtx()
+	defer cancel()
+	var err error
+	if !e.call("CancelPayment", callLimit+time.Second, func() {
+		_, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-" + tx})
+	}) {
+		return
+	}
+	// Cùng thứ tự với cách core hiểu một câu trả lời huỷ: chưa rõ trước, rồi không hỗ trợ, rồi từ chối.
+	switch {
+	case err == nil:
+	case coreOutcome(err) == outcomeUnknown:
+		e.fail("CancelPayment cho giao dịch đối tác không biết, ProviderRef rỗng, trả %v (core hiểu là chưa rõ kết quả); cần câu trả lời dứt khoát: trạng thái (err nil), RejectedError (ví dụ mã cannot_cancel) hoặc ErrNotSupported; core không bao giờ cho giao dịch quá hạn hết hạn, đơn của khách kẹt tới khi có người chốt tay", errText(err))
+	case errors.Is(err, connector.ErrNotSupported), coreOutcome(err) == outcomeRejected:
+	default:
+		e.fail("CancelPayment cho giao dịch đối tác không biết, ProviderRef rỗng, trả %v (core hiểu là đối tác không trả lời được); cần câu trả lời dứt khoát: trạng thái (err nil), RejectedError (ví dụ mã cannot_cancel) hoặc ErrNotSupported; ErrProviderUnavailable chỉ dành cho khi đã cố gọi đối tác mà không tới; core không bao giờ cho giao dịch quá hạn hết hạn và mỗi lượt quét làm cầu chì đếm thêm một lỗi", errText(err))
+	}
+}
+
 func (e *env) chargeReq(tx string) connector.ChargeRequest {
 	r := e.createReq(tx)
 	return connector.ChargeRequest{TransactionCode: tx, IdempotencyKey: r.IdempotencyKey, Money: r.Money, Method: r.Method,

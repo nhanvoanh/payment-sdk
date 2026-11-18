@@ -115,9 +115,13 @@ func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPayment
 
 // CancelPayment huỷ thanh toán chưa trả. Acme từ chối thanh toán đã trả bằng 409 already_paid, tức
 // RejectedError; ta không bao giờ tự báo "canceled" nếu acme không nói vậy (core sẽ huỷ đơn của khách đã trả tiền).
+//
+// Acme chỉ huỷ theo payment_id. Thiếu ProviderRef (Create chưa nghe được trả lời) thì biết chắc không huỷ được
+// bằng thông tin được cho: trả lời dứt khoát cannot_cancel, không gọi mạng. Không trả ErrProviderUnavailable:
+// core hiểu đó là "không rõ" và không bao giờ cho giao dịch hết hạn; với Rejected, core truy vấn lại rồi mới quyết.
 func (c *Connector) CancelPayment(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
 	if req.ProviderRef == "" {
-		return connector.CancelResult{}, notSent("thiếu ProviderRef để huỷ")
+		return connector.CancelResult{}, &connector.RejectedError{Code: "cannot_cancel", Message: "thiếu ProviderRef, acme chỉ huỷ theo payment_id"}
 	}
 	resp, err := c.send(ctx, http.MethodPost, pathPayments+"/"+url.PathEscape(req.ProviderRef)+"/cancel", nil, req.IdempotencyKey, struct{}{})
 	if err != nil {

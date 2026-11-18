@@ -36,6 +36,13 @@ type Charger interface {
 }
 
 // Canceler ứng với OpCancel.
+//
+// Core gọi huỷ cả với giao dịch mà Create chưa nghe được trả lời (ProviderRef rỗng, đối tác có thể không
+// biết nó). Khi biết chắc không có gì để huỷ, hoặc không thể huỷ bằng thông tin được cho (ví dụ thiếu mã
+// tham chiếu mà đối tác chỉ huỷ theo mã đó), CancelPayment phải trả lời DỨT KHOÁT: *RejectedError với mã do
+// connector đặt (ví dụ "cannot_cancel"); core sẽ truy vấn lại rồi mới quyết. KHÔNG trả ErrProviderUnavailable
+// hay ErrUnknownOutcome trong trường hợp đó: core hiểu là "không rõ" và không bao giờ cho giao dịch hết hạn.
+// Unavailable/Unknown chỉ dành cho khi đã cố gọi đối tác mà không tới hoặc không rõ kết quả (luật CXL-3).
 type Canceler interface {
 	CancelPayment(ctx context.Context, req CancelRequest) (CancelResult, error)
 }
