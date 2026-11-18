@@ -35,6 +35,8 @@ type customerJSON struct {
 	Name  string `json:"name,omitempty"`
 	Email string `json:"email,omitempty"`
 	Phone string `json:"phone,omitempty"`
+	// Address: acme dùng địa chỉ để chống gian lận; một chuỗi, có thể nhiều dòng.
+	Address string `json:"address,omitempty"`
 }
 
 type paymentRequest struct {
@@ -96,13 +98,14 @@ func errorCode(body []byte) (code, message string, ok bool) {
 }
 
 // values là các giá trị của khách cần che khỏi vết (hợp đồng của connector.RawExchange, luật LOG-1).
-func (c customerJSON) values() []string { return []string{c.Name, c.Email, c.Phone} }
+func (c customerJSON) values() []string { return []string{c.Name, c.Email, c.Phone, c.Address} }
 
 func newPaymentRequest(req connector.CreatePaymentRequest) paymentRequest {
 	return paymentRequest{
 		OrderCode: req.TransactionCode, Amount: req.Money.Amount, Currency: req.Money.Currency,
 		ReturnURL: req.ReturnURL, CancelURL: req.CancelURL, ClientIP: req.ClientIP,
-		Customer: customerJSON{ID: req.Customer.ID, Name: req.Customer.Name, Email: req.Customer.Email, Phone: req.Customer.Phone},
+		Customer: customerJSON{ID: req.Customer.ID, Name: req.Customer.Name, Email: req.Customer.Email, Phone: req.Customer.Phone,
+			Address: req.Customer.Address},
 	}
 }
 

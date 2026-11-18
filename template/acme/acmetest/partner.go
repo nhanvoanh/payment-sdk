@@ -42,9 +42,10 @@ type payment struct {
 }
 
 type customerJSON struct {
-	Name  string `json:"name,omitempty"`
-	Email string `json:"email,omitempty"`
-	Phone string `json:"phone,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Email   string `json:"email,omitempty"`
+	Phone   string `json:"phone,omitempty"`
+	Address string `json:"address,omitempty"`
 }
 
 // Partner an toàn cho nhiều goroutine. Mọi trạng thái nằm sau mu.
@@ -104,6 +105,16 @@ func (p *Partner) MerchantID() string { return merchantID }
 func (p *Partner) TokenFetches() int    { return p.get(func() int { return p.tokenFetches }) }
 func (p *Partner) PaymentAttempts() int { return p.get(func() int { return p.paymentAttempts }) } // kể cả bị 401
 func (p *Partner) PaymentsCreated() int { return p.get(func() int { return p.created }) }         // chỉ cái đã xử lý
+
+// CustomerAddress là địa chỉ khách acme nhận ở lệnh tạo của giao dịch tx; rỗng nếu chưa nhận.
+func (p *Partner) CustomerAddress(tx string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pay := p.payments[tx]; pay != nil {
+		return pay.Customer.Address
+	}
+	return ""
+}
 
 // BusinessRequests cài conformance.RequestCounter: mọi request nghiệp vụ đã tới (kể cả 401 và khi treo), không tính token.
 func (p *Partner) BusinessRequests() int { return p.get(func() int { return p.businessRequests }) }

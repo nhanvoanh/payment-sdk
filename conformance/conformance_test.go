@@ -1256,7 +1256,7 @@ func TestCheck_Catches_CancelWithoutRefLateArrival(t *testing.T) {
 
 // customerJSON là thân request kiểu đối tác thật: khách đi nguyên văn trong JSON.
 func customerJSON(c paykit.Customer) string {
-	b, _ := json.Marshal(map[string]string{"name": c.Name, "email": c.Email, "phone": c.Phone})
+	b, _ := json.Marshal(map[string]string{"name": c.Name, "email": c.Email, "phone": c.Phone, "address": c.Address})
 	return string(b)
 }
 
@@ -1291,6 +1291,13 @@ func TestCheck_Catches_CustomerDataInRaw(t *testing.T) {
 		},
 		"điện thoại +84": func(c paykit.Customer) connector.RawExchange {
 			return connector.RawExchange{RequestBody: `{"msisdn":"+84` + strings.TrimPrefix(c.Phone, "0") + `"}`}
+		},
+		"địa chỉ thô": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{RequestBody: "bill_to=" + url.QueryEscape(c.Address)}
+		},
+		"một dòng của địa chỉ": func(c paykit.Customer) connector.RawExchange {
+			line, _, _ := strings.Cut(c.Address, "\n")
+			return connector.RawExchange{ResponseBody: `{"street":"` + line + `"}`}
 		},
 	}
 	for name, leak := range leaks {
@@ -1355,7 +1362,7 @@ func TestCheck_RedactedRawPasses(t *testing.T) {
 		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
 			res, err := good(ctx, req)
 			c := req.Customer
-			res.Raw = connector.RawExchange{RequestBody: providerhttp.Redact(customerJSON(c), c.Name, c.Email, c.Phone)}
+			res.Raw = connector.RawExchange{RequestBody: providerhttp.Redact(customerJSON(c), c.Name, c.Email, c.Phone, c.Address)}
 			return res, err
 		}
 		return f

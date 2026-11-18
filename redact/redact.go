@@ -4,7 +4,7 @@
 // Hai lớp:
 //   - Values: thay mọi lần xuất hiện của các giá trị ĐÃ BIẾT (tên, email, điện thoại, địa chỉ...) ở các dạng
 //     thô, JSON-escape (kể cả \uXXXX cho ký tự ngoài ASCII và "\/"), URL-encode (QueryEscape, PathEscape);
-//     so không phân biệt hoa thường. Giá trị có dạng số điện thoại được so thêm ở dạng chỉ còn chữ số và
+//     so không phân biệt hoa thường. Giá trị nhiều dòng được che cả nguyên vẹn lẫn từng dòng riêng. Giá trị có dạng số điện thoại được so thêm ở dạng chỉ còn chữ số và
 //     các dạng đầu 0 / 84 / +84 suy ra được.
 //   - Cards: không cần giá trị biết trước: dãy 13–19 chữ số liền nhau qua kiểm Luhn giữ 6 số đầu + 4 số
 //     cuối; giá trị của trường cvv/cvc/cvn/card_cvv/security_code (JSON, form, XML) thành Mask.
@@ -75,7 +75,7 @@ func Contains(s string, values ...string) bool {
 // matcher dựng biểu thức khớp mọi dạng của mọi giá trị đủ dài; nil khi không có giá trị nào.
 func matcher(values []string) *regexp.Regexp {
 	set := map[string]bool{}
-	for _, v := range values {
+	for _, v := range withLines(values) {
 		v = strings.TrimSpace(v)
 		if utf8.RuneCountInString(v) < MinValueRunes {
 			continue
@@ -104,6 +104,22 @@ func matcher(values []string) *regexp.Regexp {
 		list[i] = regexp.QuoteMeta(f)
 	}
 	return regexp.MustCompile("(?i)(?:" + strings.Join(list, "|") + ")")
+}
+
+// withLines thêm từng dòng của giá trị nhiều dòng (địa chỉ) làm giá trị riêng: đối tác hay tách địa chỉ thành
+// nhiều trường hoặc nối các dòng bằng dấu phẩy, khi đó giá trị nguyên vẹn không còn xuất hiện.
+func withLines(values []string) []string {
+	out := values
+	for _, v := range values {
+		if !strings.ContainsAny(v, "\r\n") {
+			continue
+		}
+		if len(out) == len(values) {
+			out = append([]string(nil), values...)
+		}
+		out = append(out, strings.FieldsFunc(v, func(r rune) bool { return r == '\r' || r == '\n' })...)
+	}
+	return out
 }
 
 // bases là giá trị cùng các cách viết tương đương của nó (hiện chỉ có số điện thoại).

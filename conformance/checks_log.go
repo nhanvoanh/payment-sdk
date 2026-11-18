@@ -9,10 +9,14 @@ import (
 )
 
 // logCanary là khách mang chuỗi canh của LOG-1: tên có ký tự ngoài ASCII (để thử dạng \uXXXX), email có "+"
-// (để thử URL-encode), điện thoại đầu 0 (để thử dạng 84/+84). Địa chỉ thêm ở đây khi request có trường địa chỉ.
-var logCanary = paykit.Customer{ID: "C-LOG1", Name: "Đặng Canaryname", Email: "canary.mail+log1@example.com", Phone: "0987654321"}
+// (để thử URL-encode), điện thoại đầu 0 (để thử dạng 84/+84), địa chỉ nhiều dòng (để thử \n đã escape và
+// từng dòng bị tách ra trường riêng).
+var logCanary = paykit.Customer{ID: "C-LOG1", Name: "Đặng Canaryname", Email: "canary.mail+log1@example.com", Phone: "0987654321",
+	Address: "12 Đường Canarystreet\nPhường Bến Nghé, Quận 1"}
 
-func canaryValues() []string { return []string{logCanary.Name, logCanary.Email, logCanary.Phone} }
+func canaryValues() []string {
+	return []string{logCanary.Name, logCanary.Email, logCanary.Phone, logCanary.Address}
+}
 
 // expectNoCustomerData: RawExchange và câu lỗi không còn dạng nào của chuỗi canh (cùng thuật toán với core).
 func (e *env) expectNoCustomerData(what string, raw connector.RawExchange, err error) {
@@ -22,7 +26,7 @@ func (e *env) expectNoCustomerData(what string, raw connector.RawExchange, err e
 	}
 	for _, p := range parts {
 		if redact.Contains(p.text, canaryValues()...) {
-			e.fail("%s trả %s còn dữ liệu của khách (tên, email hay điện thoại; thô, JSON-escape, URL-encode hay khác hoa thường); cần che trước khi trả, ví dụ providerhttp.Redact(body, tên, email, điện thoại); vết lời gọi đối tác và log của core sẽ lưu dữ liệu cá nhân của khách", what, p.name)
+			e.fail("%s trả %s còn dữ liệu của khách (tên, email, điện thoại hay địa chỉ, kể cả một dòng của địa chỉ; thô, JSON-escape, URL-encode hay khác hoa thường); cần che trước khi trả, ví dụ providerhttp.Redact(body, tên, email, điện thoại, địa chỉ); vết lời gọi đối tác và log của core sẽ lưu dữ liệu cá nhân của khách", what, p.name)
 		}
 	}
 }

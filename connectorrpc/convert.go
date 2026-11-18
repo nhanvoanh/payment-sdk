@@ -153,11 +153,13 @@ func MoneyFromProto(m *connectorpb.Money) paykit.Money {
 }
 
 func CustomerToProto(c paykit.Customer) *connectorpb.Customer {
-	return &connectorpb.Customer{Id: valid(c.ID), Name: valid(c.Name), Email: valid(c.Email), Phone: valid(c.Phone)}
+	return &connectorpb.Customer{Id: valid(c.ID), Name: valid(c.Name), Email: valid(c.Email), Phone: valid(c.Phone),
+		Address: valid(c.Address)}
 }
 
+// CustomerFromProto: core cũ không gửi address thì Address rỗng (không có địa chỉ).
 func CustomerFromProto(c *connectorpb.Customer) paykit.Customer {
-	return paykit.Customer{ID: c.GetId(), Name: c.GetName(), Email: c.GetEmail(), Phone: c.GetPhone()}
+	return paykit.Customer{ID: c.GetId(), Name: c.GetName(), Email: c.GetEmail(), Phone: c.GetPhone(), Address: c.GetAddress()}
 }
 
 // CardToProto: nil ↔ nil.

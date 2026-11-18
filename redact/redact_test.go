@@ -169,3 +169,27 @@ func TestRedactor_SameAsString(t *testing.T) {
 		t.Errorf("nil Redactor vẫn che thẻ: %q", got)
 	}
 }
+
+// Địa chỉ nhiều dòng: che cả giá trị nguyên vẹn (mọi dạng, kể cả \n đã JSON-escape hay URL-encode) lẫn từng
+// dòng riêng, vì đối tác thường tách địa chỉ thành nhiều trường hoặc nối các dòng bằng dấu phẩy.
+func TestValues_MultiLineValue(t *testing.T) {
+	const multi = "12 Đường Canarystreet\r\nPhường Bến Nghé\n  Quận 1  "
+	for name, body := range map[string]string{
+		"thô":           "addr=" + multi + ";",
+		"JSON":          `{"address":"` + jsonEsc(multi) + `"}`,
+		"URL-encode":    "address=" + url.QueryEscape(multi),
+		"dòng tách":     `{"line1":"12 Đường Canarystreet","line2":"` + asciiJSON("Phường Bến Nghé", false) + `"}`,
+		"nối bằng phẩy": "12 Đường Canarystreet, Phường Bến Nghé, Quận 1",
+	} {
+		got := redact.Values(body, multi)
+		for _, leak := range []string{"Canarystreet", "Bến Nghé", `Bến Nghé`} {
+			if strings.Contains(got, leak) {
+				t.Errorf("%s: còn %q sau khi che: %s", name, leak, got)
+			}
+		}
+	}
+	// Dòng ngắn hơn MinValueRunes (như "Q1") không bị che riêng để không phá nát thân.
+	if got := redact.Values(`{"district":"Q1"}`, "12 Đường Canarystreet\nQ1"); got != `{"district":"Q1"}` {
+		t.Errorf("dòng ngắn bị che: %s", got)
+	}
+}

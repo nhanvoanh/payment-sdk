@@ -57,7 +57,8 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 - Webhook: `POST` JSON `{event_id, type: "payment.updated", order_code, payment_id, status, ...}`, header
   `X-Acme-Signature` = HMAC-SHA256 hex của toàn bộ thân với `SecretKey`. Trả 2xx để acme dừng gửi lại,
   4xx để bỏ cuộc, 5xx để gửi lại.
-- Mọi phản hồi thanh toán nhắc lại `customer {name, email, phone}` đã gửi lúc tạo.
+- Lệnh tạo gửi `customer {id, name, email, phone, address}`; `address` (`paykit.Customer.Address`, một chuỗi có thể
+  nhiều dòng, rỗng thì bỏ trường) acme dùng để chống gian lận. Mọi phản hồi thanh toán nhắc lại `customer` đã gửi lúc tạo.
 
 ## Không để dữ liệu khách vào vết
 
@@ -65,7 +66,8 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 thoại, địa chỉ của khách hay dữ liệu thẻ (hợp đồng trong doc của `connector.RawExchange`, luật `LOG-1`).
 Acme làm ở `redactRaw`: lệnh tạo che bằng giá trị khách của request **và** của phản hồi; truy vấn và huỷ không
 mang khách nên che bằng giá trị đọc từ phản hồi. Dùng `providerhttp.Redact(body, giá trị...)`: nó thay mọi
-dạng (thô, JSON-escape, URL-encode, khác hoa thường; điện thoại cả dạng `84`/`+84`) bằng `[REDACTED]` và che số
+dạng (thô, JSON-escape, URL-encode, khác hoa thường; điện thoại cả dạng `84`/`+84`; địa chỉ nhiều dòng cả từng dòng
+riêng) bằng `[REDACTED]` và che số
 thẻ, `cvv`. Câu lỗi cũng không được chép thân phản hồi có dữ liệu khách.
 
 ## Lỗi nào trả sentinel nào, và vì sao (luật tiền)

@@ -499,3 +499,22 @@ func TestAcme_AmbiguousSignatureHeaderIsInvalid(t *testing.T) {
 		t.Fatalf("header chữ ký viết thường phải hợp lệ: %v", err)
 	}
 }
+
+// Địa chỉ (nhiều dòng) tới acme nguyên vẹn để chống gian lận, nhưng không còn trong vết trả cho core.
+func TestAcme_SendsCustomerAddress(t *testing.T) {
+	c, p := newPair(t)
+	req := createReq("TXADDR1")
+	req.Customer = paykit.Customer{ID: "C1", Name: "Trần Thị Bé", Address: "12 Lê Lợi\nPhường Bến Nghé, Quận 1"}
+	res, err := c.CreatePayment(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.CustomerAddress("TXADDR1"); got != req.Customer.Address {
+		t.Fatalf("acme nhận địa chỉ %q, cần %q", got, req.Customer.Address)
+	}
+	for _, body := range []string{res.Raw.RequestBody, res.Raw.ResponseBody} {
+		if strings.Contains(body, "Lê Lợi") || strings.Contains(body, `Lê`) || strings.Contains(body, "Bến Nghé") {
+			t.Errorf("vết còn địa chỉ: %s", body)
+		}
+	}
+}

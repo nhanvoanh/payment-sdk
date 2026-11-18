@@ -30,7 +30,8 @@ var (
 	t0   = time.Date(2026, 11, 18, 9, 30, 15, 123456789, time.UTC)
 	card = &paykit.CardMasked{Brand: "visa", Last4: "4242", Holder: "NGUYỄN VĂN A"}
 	raw  = connector.RawExchange{RequestBody: "req ✓", ResponseBody: "phản hồi", HTTPStatus: 201, DurationMS: 42}
-	cust = paykit.Customer{ID: "c1", Name: "Trần Thị Bé", Email: "a@acme.test", Phone: "+84901234567"}
+	cust = paykit.Customer{ID: "c1", Name: "Trần Thị Bé", Email: "a@acme.test", Phone: "+84901234567",
+		Address: "12 Lê Lợi\r\nPhường Bến Nghé\tQuận 1\n"}
 	meta = map[string]string{"k": "v", "tên": "giá trị"}
 )
 

@@ -59,6 +59,8 @@ message Customer {
   string name = 2;
   string email = 3;
   string phone = 4;
+  // Địa chỉ khách: một chuỗi tự do, có thể nhiều dòng; rỗng là không có. Thêm sau (connector cũ bỏ qua).
+  string address = 5;
 }
 
 message CardMasked {

@@ -170,13 +170,16 @@ func TestFake_ConcurrentCallsCounted(t *testing.T) {
 // Mặc định của Fake tuân hợp đồng của RawExchange: có vết của request, không có dữ liệu khách.
 func TestFake_DefaultRawHasNoCustomerData(t *testing.T) {
 	f := New("acme", paykit.MethodQR)
-	cust := paykit.Customer{ID: "C1", Name: "Đặng Canaryname", Email: "canary@example.com", Phone: "0987654321"}
+	cust := paykit.Customer{ID: "C1", Name: "Đặng Canaryname", Email: "canary@example.com", Phone: "0987654321",
+		Address: "12 Đường Canarystreet\nQuận 1"}
 	cres, err := f.CreatePayment(ctx, connector.CreatePaymentRequest{TransactionCode: "T1", Customer: cust})
 	require.NoError(t, err)
 	chres, err := f.Charge(ctx, connector.ChargeRequest{TransactionCode: "T2", Customer: cust})
 	require.NoError(t, err)
 	for _, raw := range []connector.RawExchange{cres.Raw, chres.Raw} {
 		assert.Contains(t, raw.RequestBody, `"transaction_code":"T`)
-		assert.False(t, redact.Contains(raw.RequestBody+raw.ResponseBody, cust.Name, cust.Email, cust.Phone), raw.RequestBody)
+		// Địa chỉ đi trong thân như đối tác thật nhận, nhưng đã che.
+		assert.Contains(t, raw.RequestBody, `"address":"`+redact.Mask+`"`)
+		assert.False(t, redact.Contains(raw.RequestBody+raw.ResponseBody, cust.Name, cust.Email, cust.Phone, cust.Address), raw.RequestBody)
 	}
 }

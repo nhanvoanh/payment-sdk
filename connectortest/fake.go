@@ -126,8 +126,8 @@ func (f *Fake) Charge(ctx context.Context, req connector.ChargeRequest) (connect
 // đúng hợp đồng của connector.RawExchange (luật LOG-1).
 func requestRaw(tx string, m paykit.Money, c paykit.Customer) connector.RawExchange {
 	body, _ := json.Marshal(map[string]any{"transaction_code": tx, "amount": m.Amount, "currency": m.Currency,
-		"customer": map[string]string{"id": c.ID, "name": c.Name, "email": c.Email, "phone": c.Phone}})
-	return connector.RawExchange{RequestBody: providerhttp.Redact(string(body), c.Name, c.Email, c.Phone), HTTPStatus: 200}
+		"customer": map[string]string{"id": c.ID, "name": c.Name, "email": c.Email, "phone": c.Phone, "address": c.Address}})
+	return connector.RawExchange{RequestBody: providerhttp.Redact(string(body), c.Name, c.Email, c.Phone, c.Address), HTTPStatus: 200}
 }
 
 func (f *Fake) QueryPayment(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
