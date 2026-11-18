@@ -57,6 +57,8 @@ type paymentJSON struct {
 	AmountPaid  int64  `json:"amount_paid"`
 	Currency    string `json:"currency"`
 	PaidAt      string `json:"paid_at"`
+	// Customer: acme nhắc lại khách trong phản hồi; chỉ đọc để che khỏi vết (redactRaw), không dùng vào việc gì khác.
+	Customer customerJSON `json:"customer"`
 }
 
 type refundRequest struct {
@@ -92,6 +94,9 @@ func errorCode(body []byte) (code, message string, ok bool) {
 	}
 	return e.Error.Code, e.Error.Message, true
 }
+
+// values là các giá trị của khách cần che khỏi vết (hợp đồng của connector.RawExchange, luật LOG-1).
+func (c customerJSON) values() []string { return []string{c.Name, c.Email, c.Phone} }
 
 func newPaymentRequest(req connector.CreatePaymentRequest) paymentRequest {
 	return paymentRequest{

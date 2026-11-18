@@ -76,9 +76,13 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `RFD-1` | (có `refund`) `ModeDown`/`ModeHang`/`ModeReject`/`ModeGarbage` → như `PAY-3`/`PAY-4`/`PAY-5`/`PAY-6`. | Như các luật tương ứng của Create, cho tiền hoàn. |
 | `RFD-2` | (có `query_refund`) lệnh hoàn đối tác không biết → `Found == false`, không lỗi. | Core không đóng được lệnh hoàn chưa tới đối tác, khách không được hoàn lại. |
 | `RFD-3` | (có `query_refund`) `ModeHang` (ctx hạn 300 ms) và `ModeGarbage` → có lỗi; `err == nil` là vi phạm. | `failed` bịa ra khiến core chốt hoàn thất bại và có thể hoàn tiền cho khách hai lần; "không thấy" khiến core coi lệnh hoàn chưa tới đối tác. |
+| `LOG-1` | Create (và Charge nếu có) với khách mang chuỗi canh (tên có dấu, email có `+`, điện thoại đầu `0`; địa chỉ thêm khi request có trường địa chỉ), rồi (nếu có `query_payment`) truy vấn chính giao dịch đó: `RawExchange.RequestBody`, `ResponseBody` và câu lỗi không còn chuỗi canh ở dạng thô, JSON-escape (kể cả `\uXXXX`, `\/`), URL-encode (`QueryEscape`, `PathEscape`), khác hoa thường, hay (điện thoại) dạng `84…`/`+84…`. Hoàn tiền không mang dữ liệu khách nên không kiểm. Cách so là gói `redact`, cùng thuật toán với `providerhttp.Redact` và core. | Vết lời gọi đối tác (bảng `provider_requests`) và log của core lưu dữ liệu cá nhân của khách. Core che lại lần nữa nhưng chỉ với giá trị nó biết: đối tác trả lời bằng cách viết khác (ví dụ tên tách họ/tên) thì chỉ connector che được. |
 | `CTX-1` | Mọi thao tác gọi mạng (Create, Charge, Query, Cancel, Refund, QueryRefund đã khai) nhận ctx đã huỷ, đối tác treo → trả về trong 2 s, không panic. | Core không dừng được lời gọi khi tắt máy hay khi khách bỏ đi. |
 
 `Harness.CreateCallsPartner == false` (Create chỉ ký tại chỗ) thì `PAY-3`..`PAY-6` bị bỏ.
+
+Đối tác giả nên làm như đối tác thật: nhớ khách gửi lúc tạo và nhắc lại trong phản hồi truy vấn (như
+`acmetest`), để `LOG-1` kiểm được cả việc connector che phản hồi. Che bằng `providerhttp.Redact(body, giá trị...)`.
 
 ## Đối tác giả
 

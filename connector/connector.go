@@ -67,6 +67,12 @@ type RefundQuerier interface {
 }
 
 // RawExchange là bản ghi một lần gọi đối tác, để lưu vết.
+//
+// Hợp đồng (luật LOG-1): RequestBody và ResponseBody connector trả về KHÔNG được chứa dữ liệu cá nhân của
+// khách (tên, email, điện thoại, địa chỉ) ở bất kỳ dạng nào (thô, JSON-escape, URL-encode) cũng như dữ liệu
+// thẻ: che bằng providerhttp.Redact(body, các giá trị khách của request) trước khi trả. Đối tác nhắc lại
+// khách trong phản hồi của lệnh không mang khách (truy vấn, huỷ) thì che bằng giá trị đọc từ chính phản hồi.
+// Core che lại lần nữa để phòng thủ, nhưng chỉ với giá trị nó biết; câu lỗi cũng không được chứa dữ liệu khách.
 type RawExchange struct {
 	RequestBody, ResponseBody string
 	HTTPStatus                int

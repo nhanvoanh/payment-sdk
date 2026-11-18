@@ -57,6 +57,16 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 - Webhook: `POST` JSON `{event_id, type: "payment.updated", order_code, payment_id, status, ...}`, header
   `X-Acme-Signature` = HMAC-SHA256 hex của toàn bộ thân với `SecretKey`. Trả 2xx để acme dừng gửi lại,
   4xx để bỏ cuộc, 5xx để gửi lại.
+- Mọi phản hồi thanh toán nhắc lại `customer {name, email, phone}` đã gửi lúc tạo.
+
+## Không để dữ liệu khách vào vết
+
+`RawExchange` (thân request/response connector trả cho core để lưu vết) không được chứa tên, email, điện
+thoại, địa chỉ của khách hay dữ liệu thẻ (hợp đồng trong doc của `connector.RawExchange`, luật `LOG-1`).
+Acme làm ở `redactRaw`: lệnh tạo che bằng giá trị khách của request **và** của phản hồi; truy vấn và huỷ không
+mang khách nên che bằng giá trị đọc từ phản hồi. Dùng `providerhttp.Redact(body, giá trị...)`: nó thay mọi
+dạng (thô, JSON-escape, URL-encode, khác hoa thường; điện thoại cả dạng `84`/`+84`) bằng `[REDACTED]` và che số
+thẻ, `cvv`. Câu lỗi cũng không được chép thân phản hồi có dữ liệu khách.
 
 ## Lỗi nào trả sentinel nào, và vì sao (luật tiền)
 
@@ -100,7 +110,7 @@ Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã
 khai năng lực), `PAY-1`..`PAY-7` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
 từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-4` (truy vấn), `CHG-1` (thu ngay), `CXL-1`..`CXL-4` (huỷ: không báo `canceled` khi
 đã thu, khi treo hay thân rác; không đổi đối tác treo thành từ chối, kể cả khi thiếu `ProviderRef`; trả lời dứt khoát khi thiếu `ProviderRef`; đã thu thì trả "đã thu", không từ chối), `WHK-1`..`WHK-6`
-(webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-3` (hoàn tiền), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
+(webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-3` (hoàn tiền), `LOG-1` (vết không chứa dữ liệu khách), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
 
 ## Test
 

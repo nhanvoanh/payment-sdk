@@ -85,7 +85,8 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 	if err != nil {
 		return connector.CreatePaymentResult{}, badBody(err)
 	}
-	return connector.CreatePaymentResult{ProviderRef: w.PaymentID, Status: st, NextAction: na, ExpiresAt: expires, Raw: resp.Raw}, nil
+	raw := redactRaw(resp.Raw, append(newPaymentRequest(req).Customer.values(), w.Customer.values()...)...)
+	return connector.CreatePaymentResult{ProviderRef: w.PaymentID, Status: st, NextAction: na, ExpiresAt: expires, Raw: raw}, nil
 }
 
 // QueryPayment tra theo mã giao dịch của ta. Acme không biết mã đó là chuyện bình thường (core truy vấn cả
@@ -108,7 +109,8 @@ func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPayment
 	}
 	st, _ := w.status() // đã kiểm ở validate
 	paidAt, _ := parseTime("paid_at", w.PaidAt)
-	return connector.PaymentStatus{Found: true, Status: st, ProviderRef: w.PaymentID, AmountPaid: w.paid(), PaidAt: paidAt, Raw: resp.Raw}, nil
+	return connector.PaymentStatus{Found: true, Status: st, ProviderRef: w.PaymentID, AmountPaid: w.paid(), PaidAt: paidAt,
+		Raw: redactRaw(resp.Raw, w.Customer.values()...)}, nil
 }
 
 // CancelPayment huỷ thanh toán chưa trả. Acme từ chối thanh toán đã trả bằng 409 already_paid: đó là câu
@@ -137,7 +139,7 @@ func (c *Connector) CancelPayment(ctx context.Context, req connector.CancelReque
 		return connector.CancelResult{}, badBody(err)
 	}
 	st, _ := w.status()
-	return connector.CancelResult{Status: st, Raw: resp.Raw}, nil
+	return connector.CancelResult{Status: st, Raw: redactRaw(resp.Raw, w.Customer.values()...)}, nil
 }
 
 // CreateRefund tạo lệnh hoàn. Cùng luật lỗi như CreatePayment: tiền đi ra cũng không được đoán.
@@ -236,6 +238,15 @@ func (c *Connector) AckWebhook(outcome connector.WebhookOutcome) (int, []byte, s
 		return http.StatusBadRequest, []byte(`{"received":false}`), ct
 	}
 	return http.StatusOK, []byte(`{"received":true}`), ct
+}
+
+// redactRaw che dữ liệu khách khỏi vết trước khi trả cho core (hợp đồng của connector.RawExchange, luật LOG-1):
+// giá trị khách của request, và của phản hồi khi acme nhắc lại khách (lệnh truy vấn không mang khách nên chỉ
+// biết giá trị từ phản hồi). Phản hồi không đọc được (lỗi) thì không trả Raw nào.
+func redactRaw(raw connector.RawExchange, values ...string) connector.RawExchange {
+	raw.RequestBody = providerhttp.Redact(raw.RequestBody, values...)
+	raw.ResponseBody = providerhttp.Redact(raw.ResponseBody, values...)
+	return raw
 }
 
 // ---- Gọi acme và phân loại lỗi ----

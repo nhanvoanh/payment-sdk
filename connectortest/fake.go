@@ -10,6 +10,7 @@ import (
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
 )
 
 // Fake cài Connector và mọi interface tuỳ chọn; năng lực bật/tắt bằng Capabilities. An toàn khi gọi đồng thời.
@@ -101,6 +102,7 @@ func (f *Fake) CreatePayment(ctx context.Context, req connector.CreatePaymentReq
 		ProviderRef: "fake_" + req.TransactionCode,
 		Status:      connector.StatusPending,
 		NextAction:  paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.example/" + req.TransactionCode},
+		Raw:         requestRaw(req.TransactionCode, req.Money, req.Customer),
 	}, nil
 }
 
@@ -116,7 +118,16 @@ func (f *Fake) Charge(ctx context.Context, req connector.ChargeRequest) (connect
 		Status:      connector.StatusSucceeded,
 		AmountPaid:  req.Money,
 		PaidAt:      time.Now().UTC(),
+		Raw:         requestRaw(req.TransactionCode, req.Money, req.Customer),
 	}, nil
+}
+
+// requestRaw là vết mặc định của lời gọi mang dữ liệu khách: thân như đối tác thật nhận, đã che dữ liệu khách
+// đúng hợp đồng của connector.RawExchange (luật LOG-1).
+func requestRaw(tx string, m paykit.Money, c paykit.Customer) connector.RawExchange {
+	body, _ := json.Marshal(map[string]any{"transaction_code": tx, "amount": m.Amount, "currency": m.Currency,
+		"customer": map[string]string{"id": c.ID, "name": c.Name, "email": c.Email, "phone": c.Phone}})
+	return connector.RawExchange{RequestBody: providerhttp.Redact(string(body), c.Name, c.Email, c.Phone), HTTPStatus: 200}
 }
 
 func (f *Fake) QueryPayment(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {

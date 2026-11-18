@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectortest"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
 )
 
 // fakePartner là đối tác giả trong tiến trình; connector tốt dựng trên connectortest.Fake hỏi nó mỗi lần "gọi mạng".
@@ -1250,4 +1252,115 @@ func TestCheck_Catches_CancelWithoutRefLateArrival(t *testing.T) {
 		return f
 	}))
 	expectBoth(t, r, "CXL-2")
+}
+
+// customerJSON là thân request kiểu đối tác thật: khách đi nguyên văn trong JSON.
+func customerJSON(c paykit.Customer) string {
+	b, _ := json.Marshal(map[string]string{"name": c.Name, "email": c.Email, "phone": c.Phone})
+	return string(b)
+}
+
+// asciiEscaped là JSON mà mọi ký tự ngoài ASCII thành \uXXXX (như json_encode mặc định của nhiều ngôn ngữ).
+func asciiEscaped(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x80 {
+			b.WriteRune(r)
+			continue
+		}
+		fmt.Fprintf(&b, `\u%04x`, r)
+	}
+	return b.String()
+}
+
+// Connector viết ẩu: đặt dữ liệu khách vào RawExchange ở nhiều dạng, trên từng thao tác. LOG-1 phải bắt
+// mọi ca, cả qua gRPC (RawExchange đi qua dây).
+func TestCheck_Catches_CustomerDataInRaw(t *testing.T) {
+	leaks := map[string]func(c paykit.Customer) connector.RawExchange{
+		"thô trong request": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{RequestBody: customerJSON(c)}
+		},
+		"\\u trong response": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{ResponseBody: `{"holder":"` + asciiEscaped(c.Name) + `"}`}
+		},
+		"form URL-encode": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{RequestBody: "email=" + url.QueryEscape(c.Email) + "&amount=1"}
+		},
+		"email viết hoa": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{ResponseBody: strings.ToUpper(c.Email)}
+		},
+		"điện thoại +84": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{RequestBody: `{"msisdn":"+84` + strings.TrimPrefix(c.Phone, "0") + `"}`}
+		},
+	}
+	for name, leak := range leaks {
+		t.Run("create/"+name, func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+				good := f.OnCreate
+				f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+					res, err := good(ctx, req)
+					res.Raw = leak(req.Customer)
+					return res, err
+				}
+				return f
+			}))
+			expectBoth(t, r, "LOG-1")
+		})
+	}
+	t.Run("charge", func(t *testing.T) {
+		t.Parallel()
+		r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+			good := f.OnCharge
+			f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+				res, err := good(ctx, req)
+				res.Raw = connector.RawExchange{RequestBody: customerJSON(req.Customer)}
+				return res, err
+			}
+			return f
+		}))
+		expectBoth(t, r, "LOG-1")
+	})
+	t.Run("query nhắc lại khách đã gửi lúc tạo", func(t *testing.T) {
+		t.Parallel()
+		r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+			var mu sync.Mutex
+			seen := map[string]paykit.Customer{}
+			goodCreate, goodQuery := f.OnCreate, f.OnQuery
+			f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+				mu.Lock()
+				seen[req.TransactionCode] = req.Customer
+				mu.Unlock()
+				return goodCreate(ctx, req)
+			}
+			f.OnQuery = func(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
+				st, err := goodQuery(ctx, req)
+				mu.Lock()
+				c := seen[req.TransactionCode]
+				mu.Unlock()
+				st.Raw = connector.RawExchange{ResponseBody: customerJSON(c)}
+				return st, err
+			}
+			return f
+		}))
+		expectBoth(t, r, "LOG-1")
+	})
+}
+
+// Connector che bằng providerhttp.Redact thì qua LOG-1 dù thân có đủ trường của khách.
+func TestCheck_RedactedRawPasses(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnCreate
+		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			res, err := good(ctx, req)
+			c := req.Customer
+			res.Raw = connector.RawExchange{RequestBody: providerhttp.Redact(customerJSON(c), c.Name, c.Email, c.Phone)}
+			return res, err
+		}
+		return f
+	}))
+	if len(r.Findings) != 0 {
+		t.Fatalf("connector đã che không được có finding:%s", dump(r))
+	}
 }

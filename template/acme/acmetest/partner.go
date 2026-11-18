@@ -38,6 +38,13 @@ var (
 type payment struct {
 	ID, OrderCode, Status string
 	Paid                  paykit.Money
+	Customer              customerJSON // acme nhắc lại khách trong mọi phản hồi thanh toán, như nhiều đối tác thật
+}
+
+type customerJSON struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+	Phone string `json:"phone,omitempty"`
 }
 
 // Partner an toàn cho nhiều goroutine. Mọi trạng thái nằm sau mu.
@@ -289,23 +296,26 @@ func (p *Partner) business(next http.HandlerFunc) http.HandlerFunc {
 }
 
 type paymentJSON struct {
-	PaymentID   string `json:"payment_id"`
-	OrderCode   string `json:"order_code"`
-	Status      string `json:"status"`
-	RedirectURL string `json:"redirect_url,omitempty"`
-	AmountPaid  int64  `json:"amount_paid,omitempty"`
-	Currency    string `json:"currency,omitempty"`
+	PaymentID   string       `json:"payment_id"`
+	OrderCode   string       `json:"order_code"`
+	Status      string       `json:"status"`
+	RedirectURL string       `json:"redirect_url,omitempty"`
+	AmountPaid  int64        `json:"amount_paid,omitempty"`
+	Currency    string       `json:"currency,omitempty"`
+	Customer    customerJSON `json:"customer"`
 }
 
 func (pay *payment) json() paymentJSON {
-	return paymentJSON{PaymentID: pay.ID, OrderCode: pay.OrderCode, Status: pay.Status, AmountPaid: pay.Paid.Amount, Currency: pay.Paid.Currency}
+	return paymentJSON{PaymentID: pay.ID, OrderCode: pay.OrderCode, Status: pay.Status, AmountPaid: pay.Paid.Amount,
+		Currency: pay.Paid.Currency, Customer: pay.Customer}
 }
 
 func (p *Partner) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		OrderCode string `json:"order_code"`
-		Amount    int64  `json:"amount"`
-		Currency  string `json:"currency"`
+		OrderCode string       `json:"order_code"`
+		Amount    int64        `json:"amount"`
+		Currency  string       `json:"currency"`
+		Customer  customerJSON `json:"customer"`
 	}
 	if json.NewDecoder(r.Body).Decode(&in) != nil || in.OrderCode == "" || in.Amount <= 0 {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_request", "thiếu order_code hoặc amount")
@@ -316,6 +326,7 @@ func (p *Partner) handleCreate(w http.ResponseWriter, r *http.Request) {
 	pay := p.payments[in.OrderCode] // gửi lại cùng order_code (cùng Idempotency-Key) trả lại thanh toán cũ
 	if pay == nil {
 		pay = p.newPayment(in.OrderCode)
+		pay.Customer = in.Customer
 		p.created++
 	}
 	out := pay.json()
