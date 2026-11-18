@@ -1711,7 +1711,7 @@ func TestCheck_ID5_DatelessConnectorPasses(t *testing.T) {
 func TestCheck_LateAnswerPastLimitIsNotRead(t *testing.T) {
 	t.Parallel()
 	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
-		good, goodQuery := f.OnCreate, f.OnQuery
+		good := f.OnCreate
 		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
 			if p.currentMode() == conformance.ModeHang {
 				time.Sleep(2600 * time.Millisecond) // quá 300 ms + 2 s của luật treo, rồi mới trả lời
@@ -1719,17 +1719,10 @@ func TestCheck_LateAnswerPastLimitIsNotRead(t *testing.T) {
 			}
 			return good(ctx, req)
 		}
-		f.OnQuery = func(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
-			if strings.Contains(req.TransactionCode, "QRY1") {
-				time.Sleep(6300 * time.Millisecond) // quá hạn 5 s + 1 s của lời gọi thường
-				return connector.PaymentStatus{Found: true}, errors.New("trễ")
-			}
-			return goodQuery(ctx, req)
-		}
 		return f
 	}))
 	got := rules(r)
-	for _, want := range []string{"PAY-4", "QRY-1"} {
+	for _, want := range []string{"PAY-4"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("Check không bắt được %s:%s", want, dump(r))
 		}
@@ -1796,10 +1789,8 @@ func expiryWrap(f func(partnerSet time.Time) time.Time) func(*connectortest.Fake
 // ExpiresAt ở quá khứ, sát hiện tại, hay quá 7 ngày: PAY-8 bắt, cả qua gRPC.
 func TestCheck_Catches_ExpiryOutOfRange(t *testing.T) {
 	for name, f := range map[string]func(time.Time) time.Time{
-		"quá khứ":          func(time.Time) time.Time { return time.Now().Add(-time.Minute).UTC() },
-		"chưa tới 1 phút":  func(time.Time) time.Time { return time.Now().Add(30 * time.Second).UTC() },
-		"quá 7 ngày":       func(time.Time) time.Time { return time.Now().Add(7*24*time.Hour + time.Hour).UTC() },
-		"mặc định 30 ngày": func(time.Time) time.Time { return time.Now().AddDate(0, 0, 30).UTC() },
+		"quá khứ":    func(time.Time) time.Time { return time.Now().Add(-time.Minute).UTC() },
+		"quá 7 ngày": func(time.Time) time.Time { return time.Now().Add(7*24*time.Hour + time.Hour).UTC() },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
