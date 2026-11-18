@@ -30,6 +30,7 @@ type fakePartner struct {
 	mode    conformance.Mode
 	reqs    int      // request nghiệp vụ đã nhận (conformance.RequestCounter)
 	orders  []string // mã đơn của các lệnh tạo đã nhận (conformance.RequestRecorder)
+	refunds []string // mã hoàn của các lệnh hoàn đã nhận (conformance.RefundRecorder)
 	pays    map[string]paid
 	expiry  map[string]time.Time // hạn phiên đối tác đặt cho mỗi giao dịch (conformance.ExpiryReporter)
 	release chan struct{}        // đóng khi test xong, để goroutine của connector treo được giải phóng
@@ -109,6 +110,18 @@ func (p *fakePartner) OrderCodes() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.orders...)
+}
+
+func (p *fakePartner) RefundCodes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.refunds...)
+}
+
+func (p *fakePartner) recordRefund(code string) {
+	p.mu.Lock()
+	p.refunds = append(p.refunds, code)
+	p.mu.Unlock()
 }
 
 func (p *fakePartner) recordOrder(code string) {
@@ -218,6 +231,7 @@ func newGood(tb testing.TB) (*connectortest.Fake, *fakePartner) {
 		if err := p.call(ctx); err != nil {
 			return connector.RefundResult{}, err
 		}
+		p.recordRefund(req.RefundCode)
 		return connector.RefundResult{ProviderRef: "acme_" + req.RefundCode, Status: connector.StatusPending}, nil
 	}
 	f.OnQueryRefund = func(ctx context.Context, _ connector.QueryRefundRequest) (connector.RefundStatus, error) {
@@ -1850,4 +1864,83 @@ func TestCheck_PAY8_WithoutReporter(t *testing.T) {
 	}
 	r = conformance.Check(t, h(func(time.Time) time.Time { return time.Now().AddDate(0, 0, 30).UTC() }))
 	expectBoth(t, r, "PAY-8")
+}
+
+// Mã đơn mang ngày đúng của CreatedAt nhưng giờ-phút-giây lấy từ đồng hồ lúc gọi: hai lần gọi liên tiếp thường rơi
+// cùng một giây nên giống nhau. ID-4 chờ ~1,1 giây (lượt thẳng) rồi gọi lại cùng request, nên vẫn bắt.
+func TestCheck_Catches_OrderCodeWithClockSeconds(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		createRecording(f, p, true, func(req connector.CreatePaymentRequest) string {
+			return req.CreatedAt.UTC().Format("060102") + time.Now().UTC().Format("150405") + "_" + req.TransactionCode
+		})
+		return f
+	}))
+	expectOnly(t, r, "ID-4")
+}
+
+// Mã hoàn gửi đối tác lấy thêm đồng hồ (nano giây): hai lần CreateRefund cùng request gửi hai mã khác nhau. ID-4
+// bắt qua RefundRecorder, cả qua gRPC.
+func TestCheck_Catches_RefundCodeFromWallClock(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		f.OnRefund = func(ctx context.Context, req connector.RefundRequest) (connector.RefundResult, error) {
+			if err := p.call(ctx); err != nil {
+				return connector.RefundResult{}, err
+			}
+			p.recordRefund(fmt.Sprintf("%s_%d", req.RefundCode, time.Now().UnixNano()))
+			return connector.RefundResult{ProviderRef: "acme_" + req.RefundCode, Status: connector.StatusPending}, nil
+		}
+		return f
+	}))
+	expectBoth(t, r, "ID-4")
+}
+
+// noRefundRecorder giấu RefundRecorder của đối tác giả (giữ RequestRecorder).
+type noRefundRecorder struct{ *fakePartner }
+
+func (noRefundRecorder) RefundCodes() {}
+
+// Đối tác giả có RequestRecorder mà không có RefundRecorder: lượt mã hoàn của ID-4 vào Skipped kèm lý do.
+func TestCheck_ID4_RefundSkippedWithoutRefundRecorder(t *testing.T) {
+	t.Parallel()
+	h := harness(nil)
+	h.New = func(tb testing.TB) (connector.Connector, conformance.Partner) {
+		f, p := newGood(tb)
+		return f, noRefundRecorder{p}
+	}
+	r := conformance.Check(t, h)
+	if len(r.Findings) != 0 {
+		t.Fatalf("không được có finding:%s", dump(r))
+	}
+	for _, code := range []string{"ID-4", "ID-4/grpc"} {
+		if !slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, code+": ") && strings.Contains(s, "RefundRecorder") }) {
+			t.Errorf("thiếu %s trong Skipped với lý do nêu RefundRecorder: %v", code, r.Skipped)
+		}
+	}
+}
+
+// Mã không mang ngày nhưng có sẵn chuỗi 010101 (hằng số của connector): không phải ngày 0001-01-01 đoán ra, ID-5
+// không được bắn (dò theo vị trí ngày trong mã của lệnh tạo có CreatedAt, không theo chuỗi con bất kỳ).
+func TestCheck_ID5_ConstantLookingLikeZeroDateIsFine(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		createRecording(f, p, false, func(req connector.CreatePaymentRequest) string { return "M010101_" + req.TransactionCode })
+		return f
+	}))
+	if len(r.Findings) != 0 {
+		t.Fatalf("mã không mang ngày không được có finding:%s", dump(r))
+	}
+}
+
+// Ngày ở cuối mã (mã giao dịch + yyyymmdd): CreatedAt zero thành 00010101 ở đúng vị trí đó, ID-5 bắt.
+func TestCheck_Catches_ZeroCreatedAtDateSuffix(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		createRecording(f, p, false, func(req connector.CreatePaymentRequest) string {
+			return req.TransactionCode + "-" + req.CreatedAt.UTC().Format("20060102")
+		})
+		return f
+	}))
+	expectBoth(t, r, "ID-5")
 }

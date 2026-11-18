@@ -3,6 +3,7 @@ package conformance
 import (
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,11 +70,16 @@ func checkID3(e *env) {
 	}
 }
 
-// checkID4: mã đơn gửi đối tác dựng TẤT ĐỊNH từ TransactionCode + CreatedAt, không từ đồng hồ lúc gọi. Ba lần
-// CreatePayment, không chờ: (1) và (2) cùng request liên tiếp phải gửi CÙNG mã (bắt số ngẫu nhiên, nano giây, bộ
-// đếm); mã không được mang ngày HÔM NAY (yyyymmdd/yymmdd ở UTC hay UTC+7) khi CreatedAt ở ngày khác; (3) cùng
-// request nhưng CreatedAt lệch ba ngày: nếu mã (1) mang ngày của CreatedAt (dạng nhận ra được) thì mã (3) phải mang
-// ngày mới (chứng tỏ ngày lấy từ CreatedAt); mã không mang ngày nhận ra được thì (3) không bị xét.
+// clockStep: chờ giữa lần gọi 2 và 3 của ID-4 (chỉ lượt thẳng) để giây của đồng hồ chắc chắn đổi.
+const clockStep = 1100 * time.Millisecond
+
+// checkID4: mã gửi đối tác dựng TẤT ĐỊNH từ TransactionCode/RefundCode + CreatedAt, không từ đồng hồ lúc gọi. Bốn lần
+// CreatePayment: (1) và (2) cùng request liên tiếp phải gửi CÙNG mã đơn (bắt số ngẫu nhiên, nano giây, bộ đếm); chờ
+// ~1,1 giây (chỉ lượt thẳng, lượt /grpc không chờ cho nhanh); (3) cùng request phải gửi lại đúng mã (1) (bắt
+// giờ-phút-giây lấy từ đồng hồ); mã không được mang ngày HÔM NAY (yyyymmdd/yymmdd ở UTC hay UTC+7) khi CreatedAt ở
+// ngày khác; (4) cùng request nhưng CreatedAt lệch ba ngày: nếu mã (1) mang ngày của CreatedAt (dạng nhận ra được)
+// thì mã (4) phải mang ngày mới. Có refund và Partner cài RefundRecorder: hai lần CreateRefund cùng request, một
+// trước một sau lúc chờ, phải gửi cùng mã hoàn.
 func checkID4(e *env) {
 	rec, ok := e.p.(RequestRecorder)
 	if !ok {
@@ -81,35 +87,118 @@ func checkID4(e *env) {
 		return
 	}
 	e.p.SetMode(ModeNormal)
-	req := e.createReq(e.tx())
+	tx := e.tx()
+	req := e.createReq(tx)
 	later := req
 	later.CreatedAt = req.CreatedAt.Add(72 * time.Hour)
 	before := len(rec.OrderCodes())
-	for i, r := range []connector.CreatePaymentRequest{req, req, later} {
-		// Panic hay treo khi tạo (lần hai: cùng khoá) thuộc PAY-1/PAY-7, không báo trùng ở đây.
+	var ref string
+	create := func(i int, r connector.CreatePaymentRequest) bool {
+		// Panic hay treo khi tạo (lần sau: cùng khoá) thuộc PAY-1/PAY-7, không báo trùng ở đây.
 		ctx, cancel := normalCtx()
-		g := guard(callLimit+time.Second, func() { _, _ = e.c.CreatePayment(ctx, r) })
-		cancel()
-		if g != nil {
-			e.skipf("CreatePayment lần %d không xong (%s), xem PAY-1 và PAY-7", i+1, g.Error())
-			return
+		defer cancel()
+		var res connector.CreatePaymentResult
+		if g := guard(callLimit+time.Second, func() { res, _ = e.c.CreatePayment(ctx, r) }); g != nil {
+			e.skipf("CreatePayment lần %d không xong (%s), xem PAY-1 và PAY-7", i, g.Error())
+			return false
 		}
+		if i == 1 {
+			ref = res.ProviderRef
+		}
+		return true
 	}
-	codes := rec.OrderCodes()[before:]
-	if len(codes) != 3 {
-		e.notCheckedf("đối tác giả ghi %d mã đơn sau ba lần CreatePayment, cần 3 (connector có thể tự trả lại kết quả theo khoá idempotency)", len(codes))
+	if !create(1, req) || !create(2, req) {
 		return
 	}
+	refunds := e.refundCodes(tx, ref)
+	if refunds != nil && !refunds.first() {
+		refunds = nil
+	}
+	if e.srv == nil {
+		time.Sleep(clockStep)
+	}
+	if !create(3, req) || !create(4, later) {
+		return
+	}
+	codes := rec.OrderCodes()[before:]
+	if len(codes) != 4 {
+		e.notCheckedf("đối tác giả ghi %d mã đơn sau bốn lần CreatePayment, cần 4 (connector có thể tự trả lại kết quả theo khoá idempotency)", len(codes))
+		return
+	}
+	const why = "cần dựng mã chỉ từ TransactionCode và CreatedAt, không từ đồng hồ, số ngẫu nhiên hay bộ đếm; truy vấn/huỷ một lệnh tạo chưa rõ kết quả sẽ hỏi sai mã, đối tác báo không thấy và core cho hết hạn một đơn khách đã trả"
 	if codes[0] != codes[1] {
-		e.fail("hai lần CreatePayment liên tiếp cùng request (cùng TransactionCode, CreatedAt) gửi đối tác hai mã đơn khác nhau %q và %q; cần dựng mã chỉ từ TransactionCode và CreatedAt, không từ đồng hồ, số ngẫu nhiên hay bộ đếm; truy vấn/huỷ một lệnh tạo chưa rõ kết quả sẽ hỏi sai mã, đối tác báo không thấy và core cho hết hạn một đơn khách đã trả", codes[0], codes[1])
+		e.fail("hai lần CreatePayment liên tiếp cùng request (cùng TransactionCode, CreatedAt) gửi đối tác hai mã đơn khác nhau %q và %q; %s", codes[0], codes[1], why)
+		return
+	}
+	if codes[2] != codes[0] {
+		e.fail("CreatePayment cùng request gọi lại sau %v gửi đối tác mã đơn %q, khác mã lần đầu %q (mã mang giờ của đồng hồ?); %s", clockStep, codes[2], codes[0], why)
 		return
 	}
 	if day := todayIn(codes[0], req.CreatedAt); day != "" {
 		e.fail("mã đơn %q mang ngày hôm nay %q trong khi CreatedAt là %s; cần lấy ngày từ CreatedAt, không từ đồng hồ lúc gọi; truy vấn sau nửa đêm sẽ hỏi sai mã và đối tác báo không thấy đơn khách đã trả", codes[0], day, req.CreatedAt.Format(time.RFC3339Nano))
 		return
 	}
-	if dateIn(codes[0], req.CreatedAt) != "" && dateIn(codes[2], later.CreatedAt) == "" {
-		e.fail("mã đơn %q mang ngày của CreatedAt, nhưng với CreatedAt lệch ba ngày (%s) connector gửi %q, không mang ngày mới; cần lấy ngày từ CreatedAt của request; truy vấn giao dịch tạo hôm khác sẽ hỏi sai mã", codes[0], later.CreatedAt.Format(time.RFC3339Nano), codes[2])
+	if dateIn(codes[0], req.CreatedAt) != "" && dateIn(codes[3], later.CreatedAt) == "" {
+		e.fail("mã đơn %q mang ngày của CreatedAt, nhưng với CreatedAt lệch ba ngày (%s) connector gửi %q, không mang ngày mới; cần lấy ngày từ CreatedAt của request; truy vấn giao dịch tạo hôm khác sẽ hỏi sai mã", codes[0], later.CreatedAt.Format(time.RFC3339Nano), codes[3])
+		return
+	}
+	if refunds != nil {
+		refunds.second()
+	}
+}
+
+// refundProbe là lượt mã hoàn của ID-4: hai lần CreateRefund cùng request, so mã đối tác giả nhận.
+type refundProbe struct {
+	e      *env
+	rec    RefundRecorder
+	req    connector.RefundRequest
+	before int
+}
+
+// refundCodes chuẩn bị lượt mã hoàn; nil khi connector không khai refund, hoặc Partner không cài RefundRecorder
+// (khi đó luật vào Skipped với lý do, nếu không có vi phạm khác).
+func (e *env) refundCodes(tx, ref string) *refundProbe {
+	if !e.ops[connector.OpRefund] {
+		return nil
+	}
+	rec, ok := e.p.(RefundRecorder)
+	if !ok {
+		e.skipf("lượt mã hoàn tiền không kiểm được: Partner cần cài conformance.RefundRecorder")
+		return nil
+	}
+	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
+	return &refundProbe{e: e, rec: rec, req: e.refundReq(tx, ref, "R"+tx), before: len(rec.RefundCodes())}
+}
+
+func (r *refundProbe) call(i int) bool {
+	rf, _ := r.e.c.(connector.Refunder)
+	ctx, cancel := normalCtx()
+	defer cancel()
+	var err error
+	if g := guard(callLimit+time.Second, func() { _, err = rf.CreateRefund(ctx, r.req) }); g != nil {
+		r.e.skipf("CreateRefund lần %d không xong (%s), xem RFD-1", i, g.Error())
+		return false
+	}
+	if err != nil {
+		r.e.skipf("CreateRefund lần %d lỗi (%s) nên không so được mã hoàn, xem RFD-1", i, errText(err))
+		return false
+	}
+	return true
+}
+
+func (r *refundProbe) first() bool { return r.call(1) }
+
+func (r *refundProbe) second() {
+	if !r.call(2) {
+		return
+	}
+	codes := r.rec.RefundCodes()[r.before:]
+	if len(codes) != 2 {
+		r.e.notCheckedf("đối tác giả ghi %d mã hoàn sau hai lần CreateRefund, cần 2 (connector có thể tự trả lại kết quả theo khoá idempotency)", len(codes))
+		return
+	}
+	if codes[0] != codes[1] {
+		r.e.fail("hai lần CreateRefund cùng request (cùng RefundCode, CreatedAt) gửi đối tác hai mã hoàn khác nhau %q và %q; cần dựng mã chỉ từ RefundCode và CreatedAt; truy vấn một lệnh hoàn chưa rõ kết quả sẽ hỏi sai mã và core có thể hoàn tiền cho khách hai lần", codes[0], codes[1])
 	}
 }
 
@@ -117,6 +206,32 @@ var (
 	vnZone      = time.FixedZone("UTC+7", 7*3600)
 	dateLayouts = []string{"20060102", "060102"}
 )
+
+// datePos là chỗ ngày nằm trong một mã: tính từ đầu (from) và từ cuối (tail), cùng dạng và múi giờ.
+type datePos struct {
+	from, tail int
+	layout     string
+	loc        *time.Location
+}
+
+// findDate tìm ngày của t trong code; ok sai nếu không có dạng nhận ra được.
+func findDate(code string, t time.Time) (datePos, bool) {
+	for _, loc := range []*time.Location{time.UTC, vnZone} {
+		for _, f := range dateLayouts {
+			if i := strings.Index(code, t.In(loc).Format(f)); i >= 0 {
+				return datePos{from: i, tail: len(code) - i, layout: f, loc: loc}, true
+			}
+		}
+	}
+	return datePos{}, false
+}
+
+// zeroDateAt: code mang ngày 0001-01-01 ở đúng chỗ (tính từ đầu hay từ cuối) mà mã có CreatedAt mang ngày.
+func zeroDateAt(code string, p datePos) bool {
+	z := time.Time{}.In(p.loc).Format(p.layout)
+	at := func(i int) bool { return i >= 0 && i+len(z) <= len(code) && code[i:i+len(z)] == z }
+	return at(p.from) || at(len(code)-p.tail)
+}
 
 // dateIn trả dạng ngày của t (yyyymmdd hay yymmdd, ở UTC hay UTC+7) có trong code; rỗng nếu không có.
 func dateIn(code string, t time.Time) string {
@@ -153,13 +268,27 @@ func todayIn(code string, createdAt time.Time) string {
 // zero → hoặc ErrProviderUnavailable (chắc chắn chưa gửi; RequestRecorder không được thấy request nào), hoặc
 // thành công với mã KHÔNG mang ngày 0001-01-01 (010101/00010101). Truy vấn (nếu có query_payment) một giao dịch
 // đã tạo, đối tác báo đã thu, với CreatedAt zero → Found đúng hoặc ErrUnknownOutcome; Found=false là vi phạm.
+// Ngày 0001-01-01 được dò ở ĐÚNG chỗ mà mã của lệnh tạo có CreatedAt mang ngày (tính từ đầu hay từ cuối), không
+// theo chuỗi con bất kỳ: hằng số hay mã giao dịch có sẵn "010101" không phải ngày đoán ra.
 func checkID5(e *env) {
 	// Bước chuẩn bị: một giao dịch tạo bình thường (CreatedAt có), để lỗi chung của Create thuộc về PAY-1.
 	tx := e.tx()
+	rec, hasRec := e.p.(RequestRecorder)
+	var setupBefore int
+	if hasRec {
+		setupBefore = len(rec.OrderCodes())
+	}
 	if _, ok := e.createNormal(tx); !ok {
 		return
 	}
-	rec, hasRec := e.p.(RequestRecorder)
+	// Chỗ ngày nằm trong mã của lệnh tạo có CreatedAt; mã không mang ngày thì không có gì để đoán sai.
+	var pos datePos
+	var dated bool
+	if hasRec {
+		if setup := rec.OrderCodes()[setupBefore:]; len(setup) > 0 {
+			pos, dated = findDate(setup[0], txCreatedAt)
+		}
+	}
 	req := e.createReq(e.tx())
 	req.CreatedAt = time.Time{}
 	var before int
@@ -176,10 +305,9 @@ func checkID5(e *env) {
 	if hasRec {
 		sent = rec.OrderCodes()[before:]
 	}
-	zero := time.Time{}
 	switch {
 	case err == nil:
-		if dateIn(strings.Join(sent, " "), zero) != "" {
+		if dated && slices.ContainsFunc(sent, func(c string) bool { return zeroDateAt(c, pos) }) {
 			e.fail("CreatePayment với CreatedAt zero gửi đối tác mã %v mang ngày 0001-01-01; cần trả ErrProviderUnavailable (core chưa gửi CreatedAt — nâng core trước connector) hoặc dựng mã không mang ngày; sau khi nâng core, truy vấn dựng mã với ngày thật, đối tác báo không thấy và core cho hết hạn một đơn khách đã trả", sent)
 		}
 	case connector.Classify(err) == connector.CallUnavailable && !errors.Is(err, connector.ErrNotSupported):

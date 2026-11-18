@@ -35,6 +35,7 @@ var (
 	_ conformance.RequestCounter  = (*Partner)(nil)
 	_ conformance.RequestRecorder = (*Partner)(nil)
 	_ conformance.ExpiryReporter  = (*Partner)(nil)
+	_ conformance.RefundRecorder  = (*Partner)(nil)
 )
 
 // acmeZone: acme ghi thời điểm theo giờ của nó (UTC+7) kèm offset, như nhiều đối tác thật; connector phải đổi về UTC.
@@ -72,6 +73,7 @@ type Partner struct {
 	byTx     map[string]*payment // theo mã giao dịch của core (phần sau "yymmdd_"), cho các hàm của test
 	byID     map[string]*payment
 	orders   []string                // order_code của mọi lệnh tạo hợp lệ đã nhận (conformance.RequestRecorder)
+	refundRx []string                // refund_code của mọi lệnh hoàn hợp lệ đã nhận (conformance.RefundRecorder)
 	refunds  map[string]string       // refund_code -> status
 	refundOf map[string]customerJSON // refund_code -> khách của thanh toán gốc (acme nhắc lại trong phản hồi hoàn)
 	seq      int
@@ -134,6 +136,13 @@ func (p *Partner) OrderCodes() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.orders...)
+}
+
+// RefundCodes cài conformance.RefundRecorder: refund_code của mọi lệnh hoàn hợp lệ đã nhận, theo thứ tự.
+func (p *Partner) RefundCodes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.refundRx...)
 }
 
 // PaymentExpiry cài conformance.ExpiryReporter: hạn phiên acme đã đặt vào phản hồi tạo của giao dịch tx.
@@ -468,6 +477,7 @@ func (p *Partner) handleRefund(w http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.refundRx = append(p.refundRx, in.RefundCode)
 	if p.byID[in.PaymentID] == nil {
 		writeError(w, http.StatusNotFound, "not_found", "không có giao dịch này")
 		return

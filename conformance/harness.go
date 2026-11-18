@@ -69,6 +69,14 @@ type ExpiryReporter interface {
 	PaymentExpiry(transactionCode string) (time.Time, bool)
 }
 
+// RefundRecorder là phần tuỳ chọn của Partner: mã hoàn (mã lệnh hoàn phía đối tác, như connector đặt trong request)
+// của mọi lệnh hoàn đối tác giả đã NHẬN, theo thứ tự nhận. Partner cài nó (cùng RequestRecorder) và connector khai
+// refund thì ID-4 kiểm thêm mã hoàn tất định; không cài thì lượt đó vào Skipped. Tách khỏi RequestRecorder để
+// Partner đã cài RequestRecorder không phải đổi.
+type RefundRecorder interface {
+	RefundCodes() []string
+}
+
 // Harness mô tả connector cần kiểm.
 type Harness struct {
 	New    func(tb testing.TB) (connector.Connector, Partner) // mỗi kiểm tra một cặp mới

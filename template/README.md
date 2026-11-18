@@ -59,8 +59,8 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
   thật thì truy vấn giao dịch cũ dựng sai mã: chỉ đặt một lần. `CreatedAt` zero (core cũ: triển khai CORE TRƯỚC, connector sau) không bao giờ thành ngày: tạo trả
   `ErrProviderUnavailable` (không gửi gì), truy vấn trả `ErrUnknownOutcome` (không bao giờ `Found=false`). Đổi định
   dạng `order_code` của connector đang chạy thì phải truy vấn thử mã định dạng cũ khi mã mới không thấy.
-  Luật `ID-4`/`ID-5` kiểm điều này (`acmetest` cài
-  `conformance.RequestRecorder`).
+  Luật `ID-4`/`ID-5` kiểm điều này (`acmetest` cài `conformance.RequestRecorder`, và `conformance.RefundRecorder`
+  để `ID-4` kiểm cả `refund_code` gửi lại giống hệt).
 - Trạng thái thanh toán: `pending`, `paid`, `failed`, `canceled`; hoàn tiền: `pending`, `refunded`, `failed`.
   Trạng thái lạ là lỗi, không đoán.
 - HTTP: 2xx là kết quả; 4xx kèm `{"error":{"code","message"}}` là từ chối rõ ràng; **401 là từ chối trước khi
