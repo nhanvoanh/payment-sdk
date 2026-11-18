@@ -86,6 +86,15 @@ func (p *fakePartner) BusinessRequests() int {
 	return p.reqs
 }
 
+// arriveLater mô phỏng request đang bay: đối tác giả nhận (và đếm) nó sau d, khi connector đã trả về.
+func (p *fakePartner) arriveLater(d time.Duration) {
+	time.AfterFunc(d, func() {
+		p.mu.Lock()
+		p.reqs++
+		p.mu.Unlock()
+	})
+}
+
 // call mô phỏng một lần gọi mạng của connector viết đúng. ModeDown là chưa nhận nên không đếm.
 func (p *fakePartner) call(ctx context.Context) error {
 	p.mu.Lock()
@@ -868,8 +877,8 @@ func TestCheck_Catches_CancelPaidAsRejected(t *testing.T) {
 	expectBoth(t, r, "CXL-4")
 }
 
-// Câu trả lời huỷ cho giao dịch đã thu: "đã thu" (on_hold), "chưa rõ", hay trạng thái khác canceled đều an
-// toàn (core không hết hạn khi truy vấn còn thấy giao dịch); "chắc chắn chưa xử lý" thì bắn CXL-4.
+// Câu trả lời huỷ cho giao dịch đã thu: "đã thu" (on_hold) hoặc "chưa rõ" qua CXL-4. err nil kèm trạng thái
+// khác (pending, failed) được core xếp chung với RejectedError nên bắn CXL-4, như "chắc chắn chưa xử lý".
 func TestCheck_CancelPaidAnswers(t *testing.T) {
 	for name, tc := range map[string]struct {
 		res         connector.CancelResult
@@ -877,7 +886,8 @@ func TestCheck_CancelPaidAnswers(t *testing.T) {
 		wantFinding bool
 	}{
 		"on_hold":     {res: connector.CancelResult{Status: connector.StatusOnHold}},
-		"pending":     {res: connector.CancelResult{Status: connector.StatusPending}},
+		"pending":     {res: connector.CancelResult{Status: connector.StatusPending}, wantFinding: true},
+		"failed":      {res: connector.CancelResult{Status: connector.StatusFailed}, wantFinding: true},
 		"unknown":     {err: fmt.Errorf("%w: không phân biệt được", connector.ErrUnknownOutcome)},
 		"unavailable": {err: fmt.Errorf("%w: giả", connector.ErrProviderUnavailable), wantFinding: true},
 	} {
@@ -897,7 +907,7 @@ func TestCheck_CancelPaidAnswers(t *testing.T) {
 			if tc.wantFinding {
 				expectBoth(t, r, "CXL-4")
 			} else if len(r.Findings) != 0 {
-				t.Fatalf("câu trả lời an toàn về tiền không được sinh finding:%s", dump(r))
+				t.Fatalf("\"đã thu\" hoặc \"chưa rõ\" không được sinh finding:%s", dump(r))
 			}
 		})
 	}
@@ -1180,9 +1190,10 @@ func TestCheck_Catches_CancelGarbageClaimsCanceled(t *testing.T) {
 	expectBoth(t, r, "CXL-2")
 }
 
-func TestCheck_CancelPendingOnHangIsAccepted(t *testing.T) {
+// Huỷ treo/rác mà connector bịa "nil + pending" (không gọi đối tác, chỉ nhìn mode): core xếp nó chung với
+// RejectedError và quyết theo truy vấn lại, trong khi không ai biết lệnh huỷ đã tới chưa. Lượt có mã bắt nó.
+func TestCheck_Catches_CancelPendingOnHang(t *testing.T) {
 	t.Parallel()
-	// Huỷ treo/rác trả nil + pending: core hiểu là chưa huỷ và truy vấn lại, không mất tiền.
 	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
 		good := f.OnCancel
 		f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
@@ -1193,7 +1204,50 @@ func TestCheck_CancelPendingOnHangIsAccepted(t *testing.T) {
 		}
 		return f
 	}))
-	if len(r.Findings) != 0 {
-		t.Fatalf("nil + pending khi huỷ treo/rác được chấp nhận:%s", dump(r))
+	expectBoth(t, r, "CXL-2")
+}
+
+// Connector gọi đối tác thật, gặp treo hay thân rác thì trả "nil + pending" thay vì ErrUnknownOutcome. Ca "chỉ
+// khi thiếu ProviderRef" chỉ lượt mã rỗng bắt được (bộ đếm thấy request đã tới đối tác).
+func TestCheck_Catches_CancelTimeoutAsPending(t *testing.T) {
+	for name, onlyWithoutRef := range map[string]bool{"mọi lời huỷ": false, "chỉ khi thiếu ProviderRef": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+				good := f.OnCancel
+				f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+					if onlyWithoutRef && req.ProviderRef != "" {
+						return good(ctx, req)
+					}
+					if err := p.call(ctx); err != nil {
+						if connector.Classify(err) == connector.CallUnknown {
+							return connector.CancelResult{Status: connector.StatusPending}, nil
+						}
+						return connector.CancelResult{}, err
+					}
+					return good(ctx, req)
+				}
+				return f
+			}))
+			expectBoth(t, r, "CXL-2")
+		})
 	}
+}
+
+// Request tới đối tác giả trễ ~50 ms sau khi connector đã trả về (connector bỏ request đang bay): nhánh chờ
+// settleWait phải thấy nó, nên lời từ chối vẫn bị bắt chứ không bị coi là quyết định tại chỗ.
+func TestCheck_Catches_CancelWithoutRefLateArrival(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnCancel
+		f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+			if req.ProviderRef != "" || p.currentMode() != conformance.ModeHang {
+				return good(ctx, req)
+			}
+			p.arriveLater(50 * time.Millisecond)
+			return connector.CancelResult{}, &connector.RejectedError{Code: "cannot_cancel"}
+		}
+		return f
+	}))
+	expectBoth(t, r, "CXL-2")
 }

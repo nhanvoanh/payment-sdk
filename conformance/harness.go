@@ -48,8 +48,9 @@ type Tamperer interface {
 }
 
 // RequestCounter là phần tuỳ chọn của Partner: số request nghiệp vụ (không tính lấy token) đối tác giả đã NHẬN
-// từ lúc tạo, đếm ngay khi request tới (kể cả khi treo). Partner cài nó thì lượt huỷ thiếu ProviderRef khi đối
-// tác treo của CXL-2 phân biệt được quyết định tại chỗ với lời gọi tới đối tác; không cài thì lượt đó bị bỏ.
+// từ lúc tạo. Đếm ngay khi NHẬN request, trước khi treo hay trả lời, và trên MỌI đường nghiệp vụ (tạo, truy vấn,
+// huỷ, hoàn...); ModeDown không nhận nên không đếm. Partner cài nó thì lượt huỷ thiếu ProviderRef khi đối tác
+// treo của CXL-2 phân biệt được quyết định tại chỗ với lời gọi tới đối tác; không cài thì lượt đó bị bỏ.
 type RequestCounter interface {
 	BusinessRequests() int
 }

@@ -387,20 +387,29 @@ func checkCXL2(e *env) {
 		if m == ModeGarbage {
 			situation = "khi đối tác trả thân không đọc được"
 		}
-		switch {
-		case err == nil && res.Status == connector.StatusCanceled:
-			e.fail("CancelPayment %s trả Status canceled, err nil; cần lỗi chưa rõ kết quả hoặc trạng thái khác canceled; core huỷ đơn trong khi đối tác có thể vẫn thu tiền của khách", situation)
-		case err != nil && !isUnknownForCore(err):
-			e.fail("CancelPayment %s trả %v (core hiểu là %s); cần ErrUnknownOutcome; core tin chắc một kết quả huỷ mà không ai biết, đơn và tiền của khách lệch nhau", situation, err, outcomeText(err))
-		}
+		e.expectCancelUnknown(situation, res, err)
 	}
 	e.cancelWithoutRefOnHang(tx)
+}
+
+// expectCancelUnknown: lời huỷ đã tới đối tác mà không nghe được trả lời hiểu được; câu trả lời hợp lệ duy nhất
+// là lỗi core hiểu là "chưa rõ". err nil kèm trạng thái bất kỳ là một câu trả lời bịa: canceled thì core huỷ
+// đơn, trạng thái khác thì core hiểu là đối tác từ chối huỷ (như RejectedError) và quyết theo truy vấn lại.
+func (e *env) expectCancelUnknown(situation string, res connector.CancelResult, err error) {
+	switch {
+	case err == nil && res.Status == connector.StatusCanceled:
+		e.fail("CancelPayment %s trả Status canceled, err nil; cần ErrUnknownOutcome; core huỷ đơn trong khi đối tác có thể vẫn thu tiền của khách", situation)
+	case err == nil:
+		e.fail("CancelPayment %s trả Status %q, err nil; cần ErrUnknownOutcome; core hiểu là đối tác nói rõ không huỷ (như RejectedError) và quyết theo một câu trả lời không có", situation, res.Status)
+	case !isUnknownForCore(err):
+		e.fail("CancelPayment %s trả %v (core hiểu là %s); cần ErrUnknownOutcome; core tin chắc một kết quả huỷ mà không ai biết, đơn và tiền của khách lệch nhau", situation, err, outcomeText(err))
+	}
 }
 
 // cancelWithoutRefOnHang: lượt thêm của CXL-2 — huỷ thiếu ProviderRef khi đối tác treo (connector có thể huỷ
 // theo mã giao dịch). Bộ đếm request của đối tác giả phân biệt tất định: không request nào tới đối tác thì câu
 // trả lời là quyết định tại chỗ (từ chối, không hỗ trợ, hay trạng thái khác canceled đều được); có request tới
-// thì không ai biết lệnh huỷ đã tới chưa, nên như lượt có mã: chỉ "chưa rõ" hoặc trạng thái khác canceled.
+// thì như lượt có mã: chỉ "chưa rõ" hợp lệ.
 func (e *env) cancelWithoutRefOnHang(tx string) {
 	counter, ok := e.p.(RequestCounter)
 	if !ok {
@@ -408,9 +417,10 @@ func (e *env) cancelWithoutRefOnHang(tx string) {
 		return
 	}
 	cn, _ := e.c.(connector.Canceler)
-	before := counter.BusinessRequests()
+	var before int
 	var res connector.CancelResult
 	ok, err := e.modeCall(ModeHang, "CancelPayment thiếu ProviderRef", func(ctx context.Context) error {
+		before = counter.BusinessRequests() // chụp ngay trước lời huỷ đang xét, sau khi đã đặt mode
 		var err error
 		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-noref-" + tx})
 		return err
@@ -420,13 +430,13 @@ func (e *env) cancelWithoutRefOnHang(tx string) {
 	}
 	const situation = "thiếu ProviderRef khi hết hạn chờ đối tác"
 	if err == nil && res.Status == connector.StatusCanceled {
-		e.fail("CancelPayment %s trả Status canceled, err nil; cần lỗi chưa rõ kết quả hoặc trạng thái khác canceled; core huỷ đơn trong khi đối tác có thể vẫn thu tiền của khách", situation)
+		e.fail("CancelPayment %s trả Status canceled, err nil; cần ErrUnknownOutcome (đã gọi đối tác) hoặc từ chối tại chỗ; core huỷ đơn trong khi đối tác có thể vẫn thu tiền của khách", situation)
 		return
 	}
-	if err == nil || isUnknownForCore(err) || !reachedPartner(counter, before) {
+	if isUnknownForCore(err) || !reachedPartner(counter, before) {
 		return
 	}
-	e.fail("CancelPayment %s đã gửi request tới đối tác rồi trả %v (core hiểu là %s); cần ErrUnknownOutcome, vì không ai biết lệnh huỷ đã tới đối tác chưa; core tin đối tác nói rõ không huỷ (hoặc chắc chắn chưa nhận) và quyết theo một câu trả lời không có", situation, err, outcomeText(err))
+	e.expectCancelUnknown(situation+" (đã gửi request tới đối tác)", res, err)
 }
 
 // reachedPartner: đối tác giả đã nhận request nghiệp vụ nào sau mốc before. Connector có thể đã bỏ request
@@ -444,9 +454,9 @@ func reachedPartner(c RequestCounter, before int) bool {
 	}
 }
 
-// checkCXL4: đối tác báo đã thu khi huỷ mà connector trả lời "bị từ chối" (hay "chắc chắn chưa xử lý") thì core
-// quyết theo lần truy vấn lại, có thể còn chậm. Câu trả lời "đã thu" là err nil kèm succeeded hoặc on_hold;
-// "chưa rõ" cũng an toàn (core không hết hạn). canceled kèm err nil là vi phạm của CXL-1, không báo hai lần.
+// checkCXL4: đối tác báo đã thu khi huỷ. Hợp lệ chỉ khi err nil kèm succeeded/on_hold ("đã thu") hoặc lỗi core
+// hiểu là "chưa rõ". err nil kèm trạng thái khác được core xếp chung với RejectedError ("bị từ chối"), nên vi phạm
+// như nó; canceled kèm err nil là vi phạm của CXL-1, không báo hai lần.
 func checkCXL4(e *env) {
 	tx := e.tx()
 	ref, ok := e.createNormal(tx)
@@ -458,15 +468,21 @@ func checkCXL4(e *env) {
 	cn, _ := e.c.(connector.Canceler)
 	ctx, cancel := normalCtx()
 	defer cancel()
+	var res connector.CancelResult
 	var err error
 	if !e.call("CancelPayment", callLimit+time.Second, func() {
-		_, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx})
+		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx})
 	}) {
 		return
 	}
-	switch connector.Classify(err) {
-	case connector.CallRejected, connector.CallUnavailable:
-		e.fail("CancelPayment cho giao dịch đối tác báo đã thanh toán trả %v (core hiểu là %s); cần err nil kèm Status succeeded hoặc on_hold (hoặc ErrUnknownOutcome nếu không phân biệt được \"đã thu\"), không phải RejectedError; core truy vấn lại, truy vấn của đối tác còn chậm thì giao dịch khách đã trả bị xử lý như chưa trả", errText(err), outcomeText(err))
+	const need = "cần err nil kèm Status succeeded hoặc on_hold (hoặc ErrUnknownOutcome nếu không phân biệt được \"đã thu\"); core hiểu câu trả lời này là bị từ chối và quyết theo lần truy vấn lại, truy vấn của đối tác còn chậm thì giao dịch khách đã trả bị xử lý như chưa trả"
+	switch {
+	case err == nil && (res.Status == connector.StatusSucceeded || res.Status == connector.StatusOnHold || res.Status == connector.StatusCanceled):
+		// canceled thuộc CXL-1.
+	case err == nil:
+		e.fail("CancelPayment cho giao dịch đối tác báo đã thanh toán trả Status %q, err nil; %s", res.Status, need)
+	case !isUnknownForCore(err):
+		e.fail("CancelPayment cho giao dịch đối tác báo đã thanh toán trả %v (core hiểu là %s); %s", errText(err), outcomeText(err), need)
 	}
 }
 
