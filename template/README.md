@@ -73,14 +73,19 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 
 `RawExchange` (thân request/response connector trả cho core để lưu vết) không được chứa tên, email, điện
 thoại, địa chỉ của khách hay dữ liệu thẻ (hợp đồng trong doc của `connector.RawExchange`, luật `LOG-1`).
-Acme làm ở `redactRaw`: lệnh tạo che bằng khách của request **và** của phản hồi; truy vấn, huỷ, hoàn, truy vấn
-hoàn không mang khách nên che bằng khách đọc từ phản hồi; `ParseWebhook` che `ProviderEvent.Raw` (core lưu nó vào
+Acme làm ở `exchange`: lệnh tạo che bằng khách của request **và** của phản hồi; truy vấn, huỷ, hoàn, truy vấn
+hoàn không mang khách nên che bằng khách đọc từ phản hồi (kể cả thân lỗi); `ParseWebhook` che `ProviderEvent.Raw` (core lưu nó vào
 `provider_events`) bằng khách trong thân webhook. Dùng `providerhttp.RedactCustomer(body, khách)` (hoặc
 `RedactValues(body, giá trị...)` khi chỉ có giá trị rời): nó thay mọi dạng (thô, JSON-escape, URL-encode, khác hoa
 thường, bỏ dấu; từng chữ của tên khi đứng thành từ riêng; điện thoại cả dạng `84`/`+84` và có dấu phân cách; địa
 chỉ nhiều dòng cả từng dòng dài) bằng `[REDACTED]` và che số thẻ, `cvv`. Tự tách họ/tên hay đổi cách viết (bỏ
 dấu từng chữ) thì che cả phần đã tách. Câu lỗi cũng không được chép thân phản hồi có dữ liệu khách.
 `Config.Redact` của `providerhttp` là lớp khác: che thứ cố định (token, chữ ký) trước khi thân vào `Raw`.
+
+**Trả `Raw` cả khi lỗi — đây là thứ cần nhất khi tranh chấp.** Mọi nhánh lỗi sau khi đã gửi (từ chối, 5xx, thân
+không đọc được, `order_code` lệch, timeout giữa chừng) trả kết quả mang `Raw` đã che cùng lỗi; lời gọi hỏng giữa
+chừng lấy vết từ `*providerhttp.Error` (`errors.As`). Acme gom việc này ở `exchange`, gọi ngay sau `send`. Lỗi
+trước khi gửi (token, thiếu `ProviderRef`, `CreatedAt` zero) không có vết. `LOG-1` kiểm cả `Raw` ở nhánh lỗi.
 
 ## Lỗi nào trả sentinel nào, và vì sao (luật tiền)
 

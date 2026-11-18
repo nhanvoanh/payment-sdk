@@ -60,7 +60,7 @@ type paymentJSON struct {
 	AmountPaid  int64  `json:"amount_paid"`
 	Currency    string `json:"currency"`
 	PaidAt      string `json:"paid_at"`
-	// Customer: acme nhắc lại khách trong phản hồi; chỉ đọc để che khỏi vết (redactRaw), không dùng vào việc gì khác.
+	// Customer: acme nhắc lại khách trong phản hồi; chỉ đọc để che khỏi vết (exchange), không dùng vào việc gì khác.
 	Customer customerJSON `json:"customer"`
 }
 

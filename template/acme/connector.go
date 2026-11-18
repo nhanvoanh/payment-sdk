@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,12 +76,13 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 	}
 	body := newPaymentRequest(req, c.cfg.Location)
 	resp, err := c.send(ctx, http.MethodPost, pathPayments, nil, req.IdempotencyKey, body)
+	raw := exchange(resp, err, req.Customer)
 	if err != nil {
-		return connector.CreatePaymentResult{}, err
+		return connector.CreatePaymentResult{Raw: raw}, err
 	}
 	var w paymentJSON
 	if err := reply(resp, &w, rejectCreate); err != nil {
-		return connector.CreatePaymentResult{}, err
+		return connector.CreatePaymentResult{Raw: raw}, err
 	}
 	st, na, expires, err := w.forCreate()
 	if err == nil && w.OrderCode != body.OrderCode {
@@ -88,9 +90,8 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 		err = fmt.Errorf("order_code %q không khớp mã đã gửi", w.OrderCode)
 	}
 	if err != nil {
-		return connector.CreatePaymentResult{}, badBody(err)
+		return connector.CreatePaymentResult{Raw: raw}, badBody(err)
 	}
-	raw := redactRaw(resp.Raw, req.Customer, w.Customer.customer())
 	return connector.CreatePaymentResult{ProviderRef: w.PaymentID, Status: st, NextAction: na, ExpiresAt: expires, Raw: raw}, nil
 }
 
@@ -106,23 +107,24 @@ func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPayment
 	}
 	order := orderCode(req.TransactionCode, req.CreatedAt, c.cfg.Location)
 	resp, err := c.send(ctx, http.MethodGet, pathPayments, url.Values{"order_code": {order}}, "", nil)
+	raw := exchange(resp, err)
 	if err != nil {
-		return connector.PaymentStatus{}, err
+		return connector.PaymentStatus{Raw: raw}, err
 	}
 	if isNotFound(resp) {
-		return connector.PaymentStatus{Found: false, Raw: resp.Raw}, nil
+		return connector.PaymentStatus{Found: false, Raw: raw}, nil
 	}
 	var w paymentJSON
 	if err := reply(resp, &w, nil); err != nil {
-		return connector.PaymentStatus{}, err
+		return connector.PaymentStatus{Raw: raw}, err
 	}
 	if err := w.validate(); err != nil {
-		return connector.PaymentStatus{}, badBody(err)
+		return connector.PaymentStatus{Raw: raw}, badBody(err)
 	}
 	st, _ := w.status() // đã kiểm ở validate
 	paidAt, _ := parseTime("paid_at", w.PaidAt)
 	return connector.PaymentStatus{Found: true, Status: st, ProviderRef: w.PaymentID, AmountPaid: w.paid(), PaidAt: paidAt,
-		Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
+		Raw: raw}, nil
 }
 
 // CancelPayment huỷ thanh toán chưa trả. Acme từ chối thanh toán đã trả bằng 409 already_paid: đó là câu
@@ -137,21 +139,22 @@ func (c *Connector) CancelPayment(ctx context.Context, req connector.CancelReque
 		return connector.CancelResult{}, &connector.RejectedError{Code: "cannot_cancel", Message: "thiếu ProviderRef, acme chỉ huỷ theo payment_id"}
 	}
 	resp, err := c.send(ctx, http.MethodPost, pathPayments+"/"+url.PathEscape(req.ProviderRef)+"/cancel", nil, req.IdempotencyKey, struct{}{})
+	raw := exchange(resp, err)
 	if err != nil {
-		return connector.CancelResult{}, err
+		return connector.CancelResult{Raw: raw}, err
 	}
 	if code, _, ok := errorCode(resp.Body); ok && code == "already_paid" && resp.Status >= 400 && resp.Status < 500 {
-		return connector.CancelResult{Status: connector.StatusSucceeded, Raw: resp.Raw}, nil
+		return connector.CancelResult{Status: connector.StatusSucceeded, Raw: raw}, nil
 	}
 	var w paymentJSON
 	if err := reply(resp, &w, rejectCancel); err != nil {
-		return connector.CancelResult{}, err
+		return connector.CancelResult{Raw: raw}, err
 	}
 	if err := w.validate(); err != nil {
-		return connector.CancelResult{}, badBody(err)
+		return connector.CancelResult{Raw: raw}, badBody(err)
 	}
 	st, _ := w.status()
-	return connector.CancelResult{Status: st, Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
+	return connector.CancelResult{Status: st, Raw: raw}, nil
 }
 
 // CreateRefund tạo lệnh hoàn. Cùng luật lỗi như CreatePayment: tiền đi ra cũng không được đoán.
@@ -161,38 +164,40 @@ func (c *Connector) CreateRefund(ctx context.Context, req connector.RefundReques
 	}
 	body := refundRequest{RefundCode: req.RefundCode, PaymentID: req.ProviderRef, Amount: req.Money.Amount, Currency: req.Money.Currency, Reason: req.Reason}
 	resp, err := c.send(ctx, http.MethodPost, pathRefunds, nil, req.IdempotencyKey, body)
+	raw := exchange(resp, err)
 	if err != nil {
-		return connector.RefundResult{}, err
+		return connector.RefundResult{Raw: raw}, err
 	}
 	var w refundJSON
 	if err := reply(resp, &w, rejectRefund); err != nil {
-		return connector.RefundResult{}, err
+		return connector.RefundResult{Raw: raw}, err
 	}
 	st, err := w.status()
 	if err != nil || w.RefundID == "" {
-		return connector.RefundResult{}, badBody(fmt.Errorf("thân hoàn tiền thiếu refund_id hoặc trạng thái lạ"))
+		return connector.RefundResult{Raw: raw}, badBody(fmt.Errorf("thân hoàn tiền thiếu refund_id hoặc trạng thái lạ"))
 	}
-	return connector.RefundResult{ProviderRef: w.RefundID, Status: st, Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
+	return connector.RefundResult{ProviderRef: w.RefundID, Status: st, Raw: raw}, nil
 }
 
 // QueryRefund: như QueryPayment, 404 not_found là Found=false.
 func (c *Connector) QueryRefund(ctx context.Context, req connector.QueryRefundRequest) (connector.RefundStatus, error) {
 	resp, err := c.send(ctx, http.MethodGet, pathRefunds, url.Values{"refund_code": {req.RefundCode}}, "", nil)
+	raw := exchange(resp, err)
 	if err != nil {
-		return connector.RefundStatus{}, err
+		return connector.RefundStatus{Raw: raw}, err
 	}
 	if isNotFound(resp) {
-		return connector.RefundStatus{Found: false, Raw: resp.Raw}, nil
+		return connector.RefundStatus{Found: false, Raw: raw}, nil
 	}
 	var w refundJSON
 	if err := reply(resp, &w, nil); err != nil {
-		return connector.RefundStatus{}, err
+		return connector.RefundStatus{Raw: raw}, err
 	}
 	st, err := w.status()
 	if err != nil || w.RefundID == "" {
-		return connector.RefundStatus{}, badBody(fmt.Errorf("thân hoàn tiền thiếu refund_id hoặc trạng thái lạ"))
+		return connector.RefundStatus{Raw: raw}, badBody(fmt.Errorf("thân hoàn tiền thiếu refund_id hoặc trạng thái lạ"))
 	}
-	return connector.RefundStatus{Found: true, Status: st, ProviderRef: w.RefundID, Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
+	return connector.RefundStatus{Found: true, Status: st, ProviderRef: w.RefundID, Raw: raw}, nil
 }
 
 // ParseWebhook kiểm chữ ký trên byte thô TRƯỚC khi đọc bất cứ trường nào: thân chưa xác thực là dữ liệu
@@ -255,10 +260,26 @@ func (c *Connector) AckWebhook(outcome connector.WebhookOutcome) (int, []byte, s
 	return http.StatusOK, []byte(`{"received":true}`), ct
 }
 
-// redactRaw che dữ liệu khách khỏi vết trước khi trả cho core (hợp đồng của connector.RawExchange, luật LOG-1):
-// khách của request, và khách acme nhắc lại trong phản hồi (truy vấn, huỷ, hoàn không mang khách nên chỉ biết
-// khách từ phản hồi). Phản hồi không đọc được (lỗi) thì không trả Raw nào.
-func redactRaw(raw connector.RawExchange, customers ...paykit.Customer) connector.RawExchange {
+// exchange là vết của một lời gọi nghiệp vụ trả cho core, ở MỌI nhánh, kể cả lỗi: vết của lời gọi lỗi là thứ cần
+// nhất khi tranh chấp. Lời gọi hỏng giữa chừng (timeout, đứt kết nối) lấy vết từ *providerhttp.Error; lỗi trước
+// khi gửi (token, request không dựng được) thì không có vết. Che dữ liệu khách trước khi trả (hợp đồng của
+// connector.RawExchange, luật LOG-1): khách của request, và khách acme nhắc lại trong phản hồi, kể cả thân lỗi
+// (truy vấn, huỷ, hoàn không mang khách nên chỉ biết khách từ phản hồi).
+func exchange(resp *providerhttp.Response, err error, customers ...paykit.Customer) connector.RawExchange {
+	var raw connector.RawExchange
+	var perr *providerhttp.Error
+	switch {
+	case resp != nil:
+		raw = resp.Raw
+	case errors.As(err, &perr):
+		raw = perr.Raw
+	}
+	var echoed struct {
+		Customer customerJSON `json:"customer"`
+	}
+	if json.Unmarshal([]byte(raw.ResponseBody), &echoed) == nil {
+		customers = append(customers, echoed.Customer.customer())
+	}
 	for _, c := range customers {
 		raw.RequestBody = providerhttp.RedactCustomer(raw.RequestBody, c)
 		raw.ResponseBody = providerhttp.RedactCustomer(raw.ResponseBody, c)

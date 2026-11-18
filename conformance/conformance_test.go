@@ -1706,3 +1706,36 @@ func TestCheck_LateAnswerPastLimitIsNotRead(t *testing.T) {
 		}
 	}
 }
+
+// Connector che vết ở nhánh thành công nhưng nhánh LỖI (đối tác từ chối hay trả rác) trả Raw thô còn khách: LOG-1
+// phải bắt, cả qua gRPC (Raw đi qua dây kể cả khi lỗi).
+func TestCheck_Catches_CustomerDataInRawOnError(t *testing.T) {
+	for _, op := range []string{"create", "charge"} {
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+				if op == "create" {
+					good := f.OnCreate
+					f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+						res, err := good(ctx, req)
+						if err != nil {
+							res.Raw = connector.RawExchange{RequestBody: customerJSON(req.Customer), HTTPStatus: 422}
+						}
+						return res, err
+					}
+					return f
+				}
+				good := f.OnCharge
+				f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+					res, err := good(ctx, req)
+					if err != nil {
+						res.Raw = connector.RawExchange{RequestBody: customerJSON(req.Customer), HTTPStatus: 422}
+					}
+					return res, err
+				}
+				return f
+			}))
+			expectBoth(t, r, "LOG-1")
+		})
+	}
+}

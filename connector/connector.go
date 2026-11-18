@@ -66,7 +66,10 @@ type RefundQuerier interface {
 	QueryRefund(ctx context.Context, req QueryRefundRequest) (RefundStatus, error)
 }
 
-// RawExchange là bản ghi một lần gọi đối tác, để lưu vết.
+// RawExchange là bản ghi một lần gọi đối tác, để lưu vết. Trả cả khi lỗi — đây là thứ cần nhất khi tranh chấp:
+// mọi nhánh lỗi SAU khi đã gửi (đối tác từ chối, 5xx, thân không đọc được, timeout giữa chừng) đặt Raw vào kết quả
+// đi kèm lỗi (*providerhttp.Error.Raw khi lời gọi hỏng giữa chừng), cùng luật che như nhánh thành công. Core lưu vết
+// và đi qua gRPC cả khi lỗi.
 //
 // Hợp đồng (luật LOG-1): RequestBody và ResponseBody connector trả về KHÔNG được chứa dữ liệu cá nhân của
 // khách (tên, từng chữ của tên, email, điện thoại, địa chỉ) ở bất kỳ dạng nào (thô, JSON-escape, URL-encode,

@@ -36,7 +36,8 @@ func (e *env) expectNoCustomerData(what string, raw connector.RawExchange, err e
 
 // checkLOG1: mọi thao tác không được trả dữ liệu khách trong RawExchange (hay câu lỗi): tạo và charge mang khách;
 // truy vấn, huỷ, hoàn, truy vấn hoàn chạy trên giao dịch đã tạo với khách đó (đối tác có thể nhắc lại khách trong
-// phản hồi); ProviderEvent.Raw của webhook của giao dịch đó (được phép rỗng) cũng phải đã che.
+// phản hồi); ProviderEvent.Raw của webhook của giao dịch đó (được phép rỗng) cũng phải đã che. Cuối cùng tạo và
+// charge mang khách khi đối tác từ chối hay trả rác: Raw ở nhánh lỗi (nên có, để tranh chấp) cũng phải đã che.
 func checkLOG1(e *env) {
 	e.p.SetMode(ModeNormal)
 	tx := e.tx()
@@ -46,8 +47,9 @@ func checkLOG1(e *env) {
 	defer cancel()
 	res, ok, err := e.create(ctx, callLimit+time.Second, req)
 	if !ok {
-		return
+		return // tạo treo thì các lượt lỗi cũng treo: luật sẽ quá hạn của chính nó
 	}
+	defer e.logOnError()
 	e.expectNoCustomerData("CreatePayment", res.Raw, err)
 	if e.ops[connector.OpCharge] {
 		ch, _ := e.c.(connector.Charger)
@@ -96,7 +98,7 @@ func checkLOG1(e *env) {
 
 // logCall chạy một thao tác đã khai trên giao dịch mang khách chuỗi canh rồi kiểm Raw và câu lỗi.
 func (e *env) logCall(op connector.Operation, what string, fn func(ctx context.Context) (connector.RawExchange, error)) {
-	if !e.ops[op] {
+	if op != "" && !e.ops[op] { // op rỗng: thao tác bắt buộc (tạo)
 		return
 	}
 	ctx, cancel := normalCtx()
@@ -105,5 +107,31 @@ func (e *env) logCall(op connector.Operation, what string, fn func(ctx context.C
 	var err error
 	if e.call(what, callLimit+time.Second, func() { raw, err = fn(ctx) }) {
 		e.expectNoCustomerData(what, raw, err)
+	}
+}
+
+// logOnError: tạo (và charge nếu có) mang khách chuỗi canh ở ModeReject và ModeGarbage; Raw trả kèm lỗi và câu lỗi
+// không được còn dữ liệu khách. Request đã mang khách nên vết của nhánh lỗi lộ khách nếu connector quên che.
+func (e *env) logOnError() {
+	defer e.p.SetMode(ModeNormal)
+	for _, m := range []Mode{ModeReject, ModeGarbage} {
+		situation := " khi đối tác từ chối"
+		if m == ModeGarbage {
+			situation = " khi đối tác trả thân không đọc được"
+		}
+		e.p.SetMode(m)
+		req := e.createReq(e.tx())
+		req.Customer = logCanary
+		e.logCall("", "CreatePayment"+situation, func(ctx context.Context) (connector.RawExchange, error) {
+			r, err := e.c.CreatePayment(ctx, req)
+			return r.Raw, err
+		})
+		creq := e.chargeReq(e.tx())
+		creq.Customer = logCanary
+		e.logCall(connector.OpCharge, "Charge"+situation, func(ctx context.Context) (connector.RawExchange, error) {
+			ch, _ := e.c.(connector.Charger)
+			r, err := ch.Charge(ctx, creq)
+			return r.Raw, err
+		})
 	}
 }

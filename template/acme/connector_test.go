@@ -607,3 +607,78 @@ func TestAcme_ZeroCreatedAtNeverGuessesDate(t *testing.T) {
 		t.Fatalf("truy vấn với CreatedAt zero: found=%v err=%v, cần ErrUnknownOutcome", st.Found, err)
 	}
 }
+
+// Mọi nhánh LỖI sau khi đã gửi vẫn trả Raw (đã che): đó là thứ cần nhất khi tranh chấp. Khách của request và khách
+// acme nhắc lại trong thân lỗi đều không được còn trong vết.
+func TestAcme_RawReturnedOnErrorBranches(t *testing.T) {
+	cust := paykit.Customer{ID: "C1", Name: "Trần Thị Bé", Email: "be.tran@example.com", Phone: "0912345678"}
+	echo := `{"error":{"code":"%s","message":"m"},"customer":{"name":"Trần Thị Bé","email":"be.tran@example.com"}}`
+	leaks := func(t *testing.T, what string, raw connector.RawExchange) {
+		t.Helper()
+		for _, s := range []string{raw.RequestBody, raw.ResponseBody} {
+			if strings.Contains(s, "Trần") || strings.Contains(s, "be.tran") || strings.Contains(s, "0912345678") {
+				t.Errorf("%s: vết còn dữ liệu khách: %s", what, s)
+			}
+		}
+	}
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		"từ chối":         {422, strings.ReplaceAll(echo, "%s", "declined")},
+		"5xx":             {503, strings.ReplaceAll(echo, "%s", "unavailable")},
+		"thân rác":        {200, `<<rác>>`},
+		"order_code lệch": {201, `{"payment_id":"p1","order_code":"000000_KHAC","status":"pending","redirect_url":"https://pay.acme.example/x","customer":{"name":"Trần Thị Bé"}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := stub(t, goodToken, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			ctx := context.Background()
+			req := createReq("TRAWERR")
+			req.Customer = cust
+			res, err := c.CreatePayment(ctx, req)
+			if err == nil || res.Raw.HTTPStatus != tc.status || res.Raw.RequestBody == "" || res.Raw.ResponseBody == "" {
+				t.Errorf("tạo: err = %v, Raw = %+v; cần lỗi kèm Raw đủ request, phản hồi và mã HTTP", err, res.Raw)
+			}
+			leaks(t, "tạo", res.Raw)
+			if tc.status == 201 {
+				return // thân hợp lệ cho thao tác khác: chỉ tạo mới lệch
+			}
+			q, err := c.QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "TRAWERR", CreatedAt: created0})
+			if err == nil || q.Raw.HTTPStatus != tc.status || q.Raw.ResponseBody == "" {
+				t.Errorf("truy vấn: err = %v, Raw = %+v; cần lỗi kèm Raw", err, q.Raw)
+			}
+			leaks(t, "truy vấn", q.Raw)
+			cn, err := c.CancelPayment(ctx, connector.CancelRequest{TransactionCode: "TRAWERR", ProviderRef: "p1", CreatedAt: created0})
+			if err == nil || cn.Raw.HTTPStatus != tc.status || cn.Raw.ResponseBody == "" {
+				t.Errorf("huỷ: err = %v, Raw = %+v; cần lỗi kèm Raw", err, cn.Raw)
+			}
+			leaks(t, "huỷ", cn.Raw)
+			rf, err := c.CreateRefund(ctx, connector.RefundRequest{RefundCode: "RRAWERR", ProviderRef: "p1", Money: amount})
+			if err == nil || rf.Raw.HTTPStatus != tc.status || rf.Raw.RequestBody == "" || rf.Raw.ResponseBody == "" {
+				t.Errorf("hoàn: err = %v, Raw = %+v; cần lỗi kèm Raw", err, rf.Raw)
+			}
+			leaks(t, "hoàn", rf.Raw)
+			qr, err := c.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "RRAWERR"})
+			if err == nil || qr.Raw.HTTPStatus != tc.status || qr.Raw.ResponseBody == "" {
+				t.Errorf("truy vấn hoàn: err = %v, Raw = %+v; cần lỗi kèm Raw", err, qr.Raw)
+			}
+			leaks(t, "truy vấn hoàn", qr.Raw)
+		})
+	}
+	t.Run("hết hạn chờ", func(t *testing.T) {
+		c, p := newPair(t)
+		p.SetMode(conformance.ModeHang)
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		req := createReq("TRAWHANG")
+		req.Customer = cust
+		res, err := c.CreatePayment(ctx, req)
+		if !errors.Is(err, connector.ErrUnknownOutcome) || res.Raw.RequestBody == "" {
+			t.Errorf("err = %v, Raw = %+v; cần ErrUnknownOutcome kèm RequestBody đã gửi", err, res.Raw)
+		}
+		leaks(t, "tạo khi treo", res.Raw)
+	})
+}
