@@ -31,6 +31,8 @@ const (
 var (
 	_ conformance.Partner  = (*Partner)(nil)
 	_ conformance.Tamperer = (*Partner)(nil)
+
+	_ conformance.RequestCounter = (*Partner)(nil)
 )
 
 type payment struct {
@@ -57,6 +59,7 @@ type Partner struct {
 	rejectAuth, failTokens, fail5xx        bool
 	refuseCancel, lagQueries               bool
 	tokenFetches, paymentAttempts, created int
+	businessRequests                       int
 }
 
 // NewPartner khởi động đối tác giả và tự dọn khi test xong.
@@ -94,6 +97,9 @@ func (p *Partner) MerchantID() string { return merchantID }
 func (p *Partner) TokenFetches() int    { return p.get(func() int { return p.tokenFetches }) }
 func (p *Partner) PaymentAttempts() int { return p.get(func() int { return p.paymentAttempts }) } // kể cả bị 401
 func (p *Partner) PaymentsCreated() int { return p.get(func() int { return p.created }) }         // chỉ cái đã xử lý
+
+// BusinessRequests cài conformance.RequestCounter: mọi request nghiệp vụ đã tới (kể cả 401 và khi treo), không tính token.
+func (p *Partner) BusinessRequests() int { return p.get(func() int { return p.businessRequests }) }
 
 func (p *Partner) get(f func() int) int {
 	p.mu.Lock()
@@ -251,6 +257,7 @@ func (p *Partner) business(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "close")
 		p.mu.Lock()
+		p.businessRequests++
 		if r.Method == http.MethodPost && r.URL.Path == "/v1/payments" {
 			p.paymentAttempts++
 		}

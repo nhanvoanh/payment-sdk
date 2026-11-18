@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/conformance"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
@@ -24,6 +25,7 @@ import (
 type fakePartner struct {
 	mu      sync.Mutex
 	mode    conformance.Mode
+	reqs    int // request nghiệp vụ đã nhận (conformance.RequestCounter)
 	pays    map[string]paid
 	release chan struct{} // đóng khi test xong, để goroutine của connector treo được giải phóng
 }
@@ -78,9 +80,21 @@ func (p *fakePartner) lookup(tx string) (paid, bool) {
 	return v, ok
 }
 
-// call mô phỏng một lần gọi mạng của connector viết đúng.
+func (p *fakePartner) BusinessRequests() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reqs
+}
+
+// call mô phỏng một lần gọi mạng của connector viết đúng. ModeDown là chưa nhận nên không đếm.
 func (p *fakePartner) call(ctx context.Context) error {
-	switch p.currentMode() {
+	p.mu.Lock()
+	mode := p.mode
+	if mode != conformance.ModeDown {
+		p.reqs++
+	}
+	p.mu.Unlock()
+	switch mode {
 	case conformance.ModeDown:
 		return fmt.Errorf("%w: không mở được kết nối", connector.ErrProviderUnavailable)
 	case conformance.ModeHang:
@@ -854,47 +868,62 @@ func TestCheck_Catches_CancelPaidAsRejected(t *testing.T) {
 	expectBoth(t, r, "CXL-4")
 }
 
-// Trả "đã thu" bằng on_hold cũng qua CXL-4; trả trạng thái khác (pending) thì không.
+// Câu trả lời huỷ cho giao dịch đã thu: "đã thu" (on_hold), "chưa rõ", hay trạng thái khác canceled đều an
+// toàn (core không hết hạn khi truy vấn còn thấy giao dịch); "chắc chắn chưa xử lý" thì bắn CXL-4.
 func TestCheck_CancelPaidAnswers(t *testing.T) {
-	for st, wantFinding := range map[connector.Status]bool{connector.StatusOnHold: false, connector.StatusPending: true} {
-		t.Run(string(st), func(t *testing.T) {
+	for name, tc := range map[string]struct {
+		res         connector.CancelResult
+		err         error
+		wantFinding bool
+	}{
+		"on_hold":     {res: connector.CancelResult{Status: connector.StatusOnHold}},
+		"pending":     {res: connector.CancelResult{Status: connector.StatusPending}},
+		"unknown":     {err: fmt.Errorf("%w: không phân biệt được", connector.ErrUnknownOutcome)},
+		"unavailable": {err: fmt.Errorf("%w: giả", connector.ErrProviderUnavailable), wantFinding: true},
+	} {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
 				good := f.OnCancel
 				f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
 					res, err := good(ctx, req)
 					if err == nil && res.Status == connector.StatusSucceeded {
-						return connector.CancelResult{Status: st}, nil
+						return tc.res, tc.err
 					}
 					return res, err
 				}
 				return f
 			}))
-			if wantFinding {
+			if tc.wantFinding {
 				expectBoth(t, r, "CXL-4")
 			} else if len(r.Findings) != 0 {
-				t.Fatalf("on_hold là câu trả lời \"đã thu\" hợp lệ:%s", dump(r))
+				t.Fatalf("câu trả lời an toàn về tiền không được sinh finding:%s", dump(r))
 			}
 		})
 	}
 }
 
-// Connector huỷ theo mã giao dịch khi thiếu ProviderRef, và báo đối tác treo là "bị từ chối" (gọi xong rồi
-// mới đổi lỗi, hoặc đổi luôn): core hiểu là đối tác nói rõ không huỷ trong khi không ai biết lệnh huỷ đã tới chưa.
+// Connector huỷ theo mã giao dịch khi thiếu ProviderRef: gọi đối tác, gặp treo rồi trả "bị từ chối" (chờ hết
+// hạn của luật, hoặc có timeout nội bộ ngắn hơn). Bộ đếm của đối tác giả thấy request đã tới nên bắt được.
 func TestCheck_Catches_CancelWithoutRefHangAsRejected(t *testing.T) {
-	for name, waits := range map[string]bool{"chờ đối tác rồi đổi lỗi": true, "đổi lỗi ngay": false} {
+	for name, internal := range map[string]time.Duration{"chờ hết hạn ctx": 0, "timeout nội bộ 20ms": 20 * time.Millisecond} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
 				good := f.OnCancel
 				f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
-					if req.ProviderRef == "" && p.currentMode() == conformance.ModeHang {
-						if waits {
-							p.hang(ctx)
-						}
-						return connector.CancelResult{}, &connector.RejectedError{Code: "timeout"}
+					if req.ProviderRef != "" {
+						return good(ctx, req)
 					}
-					return good(ctx, req)
+					if internal > 0 {
+						var cancel context.CancelFunc
+						ctx, cancel = context.WithTimeout(ctx, internal)
+						defer cancel()
+					}
+					if err := p.call(ctx); err != nil {
+						return connector.CancelResult{}, &connector.RejectedError{Code: "cannot_cancel", Message: err.Error()}
+					}
+					return connector.CancelResult{Status: connector.StatusCanceled}, nil
 				}
 				return f
 			}))
@@ -902,6 +931,35 @@ func TestCheck_Catches_CancelWithoutRefHangAsRejected(t *testing.T) {
 		})
 	}
 }
+
+// Đối tác giả không cài RequestCounter: lượt huỷ thiếu ProviderRef khi treo không đoán bằng thời gian mà bị bỏ,
+// có lý do; các phần khác của CXL-2 vẫn chạy (vi phạm ở lượt có mã vẫn bị bắt).
+func TestCheck_CancelWithoutRefOnHang_SkippedWithoutCounter(t *testing.T) {
+	t.Parallel()
+	h := harness(nil)
+	inner := h.New
+	h.New = func(tb testing.TB) (connector.Connector, conformance.Partner) {
+		c, p := inner(tb)
+		return c, plainPartner{p}
+	}
+	r := conformance.Check(t, h)
+	if len(r.Findings) != 0 {
+		t.Fatalf("connector tốt không được có finding:%s", dump(r))
+	}
+	for _, code := range []string{"CXL-2", "CXL-2/grpc"} {
+		if !slices.ContainsFunc(r.Skipped, func(s string) bool {
+			return strings.HasPrefix(s, code+": ") && strings.Contains(s, "RequestCounter")
+		}) {
+			t.Errorf("thiếu %s trong Skipped với lý do nêu RequestCounter: %v", code, r.Skipped)
+		}
+	}
+	if len(r.Skipped) != 2 {
+		t.Errorf("chỉ lượt thêm của CXL-2 bị bỏ: %v", r.Skipped)
+	}
+}
+
+// plainPartner giấu mọi interface tuỳ chọn của đối tác giả (RequestCounter).
+type plainPartner struct{ conformance.Partner }
 
 // Các câu trả lời dứt khoát đều qua CXL-3.
 func TestCheck_CancelWithoutRefDefiniteAnswersPass(t *testing.T) {

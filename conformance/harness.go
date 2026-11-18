@@ -47,6 +47,13 @@ type Tamperer interface {
 	TamperedWebhook(raw connector.RawWebhook) connector.RawWebhook
 }
 
+// RequestCounter là phần tuỳ chọn của Partner: số request nghiệp vụ (không tính lấy token) đối tác giả đã NHẬN
+// từ lúc tạo, đếm ngay khi request tới (kể cả khi treo). Partner cài nó thì lượt huỷ thiếu ProviderRef khi đối
+// tác treo của CXL-2 phân biệt được quyết định tại chỗ với lời gọi tới đối tác; không cài thì lượt đó bị bỏ.
+type RequestCounter interface {
+	BusinessRequests() int
+}
+
 // Harness mô tả connector cần kiểm.
 type Harness struct {
 	New    func(tb testing.TB) (connector.Connector, Partner) // mỗi kiểm tra một cặp mới
@@ -76,6 +83,7 @@ const (
 	hangSlack   = 2 * time.Second        // thời gian cho phép vượt hạn ctx
 	cancelLimit = 2 * time.Second        // ctx đã huỷ thì phải trả về trong khoảng này
 	ruleLimit   = 30 * time.Second       // lưới an toàn cho cả một luật
+	settleWait  = 200 * time.Millisecond // chờ request đang bay tới đối tác giả trước khi đọc bộ đếm
 )
 
 // guardError: fn panic (panicked đúng) hoặc không xong trong hạn.

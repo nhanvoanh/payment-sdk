@@ -48,8 +48,10 @@ type Charger interface {
 //
 // Đối tác trả lời "đã thu rồi, không huỷ được" thì trả CancelResult{Status: StatusSucceeded} (hoặc StatusOnHold)
 // với err nil, KHÔNG trả RejectedError: với câu trả lời "đã thu" core không bao giờ cho hết hạn ở lượt đó, còn
-// với lời từ chối core truy vấn lại và quyết theo truy vấn, có thể còn chậm (luật CXL-4). Bị từ chối mà truy vấn
-// lại thấy đối tác vẫn giữ thanh toán chưa kết thúc thì core không cho hết hạn; không thấy thì cho hết hạn.
+// với lời từ chối core truy vấn lại và quyết theo truy vấn, có thể còn chậm (luật CXL-4). Lần truy vấn
+// gần nhất thấy đối tác vẫn giữ thanh toán chưa kết thúc thì core không cho hết hạn; core chỉ cho hết hạn khi
+// đối tác nhận huỷ hoặc mọi lần truy vấn của lượt đều không thấy giao dịch. Đối tác không phân biệt được
+// "đã thu" khi huỷ thì truy vấn xác nhận rồi mới trả lời, hoặc trả ErrUnknownOutcome.
 type Canceler interface {
 	CancelPayment(ctx context.Context, req CancelRequest) (CancelResult, error)
 }
