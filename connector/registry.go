@@ -86,6 +86,15 @@ func (r *Registry) SetDefault(m paykit.Method, name string) error {
 	return nil
 }
 
+// DefaultFor trả tên connector mặc định của method (đã đặt bằng SetDefault), kể cả khi nó chưa đăng ký: core
+// dùng để phân biệt "đối tác có trong cấu hình mà chưa lên" (tạm thời) với "không hỗ trợ".
+func (r *Registry) DefaultFor(m paykit.Method) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	name, ok := r.defaults[m]
+	return name, ok
+}
+
 func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

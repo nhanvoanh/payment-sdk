@@ -93,3 +93,17 @@ func TestForMethod_AmbiguousWithoutDefaultReturnsNothing(t *testing.T) {
 	require.True(t, ok, "đúng một ứng viên thì trả nó")
 	assert.Equal(t, "a", c.Name())
 }
+
+func TestRegistry_DefaultForEvenWhenUnregistered(t *testing.T) {
+	r := NewRegistry()
+	_, ok := r.DefaultFor(paykit.MethodQR)
+	if ok {
+		t.Fatal("chưa đặt mặc định")
+	}
+	if err := r.SetDefault(paykit.MethodQR, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	if name, ok := r.DefaultFor(paykit.MethodQR); !ok || name != "acme" {
+		t.Fatalf("DefaultFor = %q, %v", name, ok)
+	}
+}
