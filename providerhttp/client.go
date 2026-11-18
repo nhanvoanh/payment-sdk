@@ -57,8 +57,9 @@ type Config struct {
 	MaxResponseBytes int64
 	// MaxRequestBytes giới hạn thân request; mặc định 1 MiB.
 	MaxRequestBytes int64
-	// Redact che dữ liệu nhạy cảm trong thân trước khi vào Raw (nil: giữ nguyên). Không ảnh hưởng
-	// Response.Body.
+	// Redact che dữ liệu nhạy cảm CỐ ĐỊNH (token, chữ ký...) trong thân trước khi vào Raw (nil: giữ nguyên);
+	// không ảnh hưởng Response.Body. Dữ liệu của khách thì che theo từng lời gọi bằng RedactCustomer/RedactValues
+	// trên Raw sau khi Do trả về (xem redact.go).
 	Redact func(body []byte) []byte
 	// TLSClientConfig cho đối tác cần mTLS hoặc CA riêng; được clone, và HTTP/2 vẫn tắt.
 	TLSClientConfig *tls.Config

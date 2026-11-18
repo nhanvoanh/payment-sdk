@@ -21,6 +21,7 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectortest"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
 )
 
 // fakePartner là đối tác giả trong tiến trình; connector tốt dựng trên connectortest.Fake hỏi nó mỗi lần "gọi mạng".
@@ -1315,6 +1316,19 @@ func TestCheck_Catches_CustomerDataInRaw(t *testing.T) {
 		"địa chỉ thô": func(c paykit.Customer) connector.RawExchange {
 			return connector.RawExchange{RequestBody: "bill_to=" + url.QueryEscape(c.Address)}
 		},
+		"tên chủ thẻ bỏ dấu": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{RequestBody: `{"holder":"` + strings.ToUpper(redact.Fold(c.Name)) + `"}`}
+		},
+		"họ tên tách": func(c paykit.Customer) connector.RawExchange {
+			f := strings.Fields(c.Name)
+			return connector.RawExchange{RequestBody: `{"first":"` + f[len(f)-1] + `","last":"` + f[0] + `"}`}
+		},
+		"họ bỏ dấu đứng riêng": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{RequestBody: `{"last":"` + strings.ToUpper(redact.Fold(strings.Fields(c.Name)[0])) + `"}`}
+		},
+		"điện thoại có dấu cách": func(c paykit.Customer) connector.RawExchange {
+			return connector.RawExchange{RequestBody: `{"tel":"` + c.Phone[:4] + " " + c.Phone[4:7] + " " + c.Phone[7:] + `"}`}
+		},
 		"một dòng của địa chỉ": func(c paykit.Customer) connector.RawExchange {
 			line, _, _ := strings.Cut(c.Address, "\n")
 			return connector.RawExchange{ResponseBody: `{"street":"` + line + `"}`}
@@ -1382,7 +1396,7 @@ func TestCheck_RedactedRawPasses(t *testing.T) {
 		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
 			res, err := good(ctx, req)
 			c := req.Customer
-			res.Raw = connector.RawExchange{RequestBody: providerhttp.Redact(customerJSON(c), c.Name, c.Email, c.Phone, c.Address)}
+			res.Raw = connector.RawExchange{RequestBody: providerhttp.RedactCustomer(customerJSON(c), c)}
 			return res, err
 		}
 		return f
@@ -1448,5 +1462,72 @@ func TestCheck_ID4_SkippedWithoutRecorder(t *testing.T) {
 		if !slices.Contains(r.Skipped, code+": đối tác giả không cài conformance.RequestRecorder") {
 			t.Errorf("thiếu %s trong Skipped: %v", code, r.Skipped)
 		}
+	}
+}
+
+// Các thao tác không mang khách nhưng đối tác nhắc lại khách đã gửi lúc tạo: LOG-1 phải bắt từng thao tác.
+func TestCheck_Catches_CustomerEchoedByOtherOperations(t *testing.T) {
+	type echo struct {
+		mu   sync.Mutex
+		last paykit.Customer
+	}
+	wrap := func(set func(f *connectortest.Fake, e *echo)) func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		return func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+			e := &echo{}
+			good := f.OnCreate
+			f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+				e.mu.Lock()
+				e.last = req.Customer
+				e.mu.Unlock()
+				return good(ctx, req)
+			}
+			set(f, e)
+			return f
+		}
+	}
+	body := func(e *echo) string {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return customerJSON(e.last)
+	}
+	cases := map[string]func(f *connectortest.Fake, e *echo){
+		"refund": func(f *connectortest.Fake, e *echo) {
+			good := f.OnRefund
+			f.OnRefund = func(ctx context.Context, req connector.RefundRequest) (connector.RefundResult, error) {
+				r, err := good(ctx, req)
+				r.Raw.ResponseBody = body(e)
+				return r, err
+			}
+		},
+		"query_refund": func(f *connectortest.Fake, e *echo) {
+			good := f.OnQueryRefund
+			f.OnQueryRefund = func(ctx context.Context, req connector.QueryRefundRequest) (connector.RefundStatus, error) {
+				r, err := good(ctx, req)
+				r.Raw.ResponseBody = body(e)
+				return r, err
+			}
+		},
+		"cancel": func(f *connectortest.Fake, e *echo) {
+			good := f.OnCancel
+			f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+				r, err := good(ctx, req)
+				r.Raw.ResponseBody = body(e)
+				return r, err
+			}
+		},
+		"webhook Raw": func(f *connectortest.Fake, e *echo) {
+			good := f.OnParseWebhook
+			f.OnParseWebhook = func(ctx context.Context, raw connector.RawWebhook) (connector.ProviderEvent, error) {
+				ev, err := good(ctx, raw)
+				ev.Raw = []byte(body(e))
+				return ev, err
+			}
+		},
+	}
+	for name, set := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			expectBoth(t, conformance.Check(t, harness(wrap(set))), "LOG-1")
+		})
 	}
 }

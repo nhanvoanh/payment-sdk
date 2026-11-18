@@ -75,6 +75,8 @@ type refundRequest struct {
 type refundJSON struct {
 	RefundID string `json:"refund_id"`
 	Status   string `json:"status"`
+	// Customer: acme nhắc lại khách của thanh toán gốc; chỉ đọc để che khỏi vết.
+	Customer customerJSON `json:"customer"`
 }
 
 // webhookJSON là thân webhook; Type quyết định có liên quan tới connector này hay không.
@@ -98,8 +100,10 @@ func errorCode(body []byte) (code, message string, ok bool) {
 	return e.Error.Code, e.Error.Message, true
 }
 
-// values là các giá trị của khách cần che khỏi vết (hợp đồng của connector.RawExchange, luật LOG-1).
-func (c customerJSON) values() []string { return []string{c.Name, c.Email, c.Phone, c.Address} }
+// customer là khách acme nhắc lại, dùng để che khỏi vết (hợp đồng của connector.RawExchange, luật LOG-1).
+func (c customerJSON) customer() paykit.Customer {
+	return paykit.Customer{Name: c.Name, Email: c.Email, Phone: c.Phone, Address: c.Address}
+}
 
 // orderCode là mã đơn gửi acme: yymmdd (ngày TẠO giao dịch ở múi giờ loc) + "_" + mã giao dịch của core. Chỉ
 // dựng từ TransactionCode và CreatedAt mà core cấp (giống nhau ở mọi lần gọi lại), KHÔNG BAO GIỜ từ time.Now():

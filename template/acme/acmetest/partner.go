@@ -63,8 +63,9 @@ type Partner struct {
 	payments map[string]*payment // theo order_code (yymmdd_<mã giao dịch>), như acme thật
 	byTx     map[string]*payment // theo mã giao dịch của core (phần sau "yymmdd_"), cho các hàm của test
 	byID     map[string]*payment
-	orders   []string          // order_code của mọi lệnh tạo hợp lệ đã nhận (conformance.RequestRecorder)
-	refunds  map[string]string // refund_code -> status
+	orders   []string                // order_code của mọi lệnh tạo hợp lệ đã nhận (conformance.RequestRecorder)
+	refunds  map[string]string       // refund_code -> status
+	refundOf map[string]customerJSON // refund_code -> khách của thanh toán gốc (acme nhắc lại trong phản hồi hoàn)
 	seq      int
 
 	rejectAuth, failTokens, fail5xx        bool
@@ -83,7 +84,7 @@ func NewPartner(tb testing.TB) *Partner {
 	p := &Partner{
 		tb: tb, addr: lis.Addr().String(), lis: lis, done: make(chan struct{}),
 		tokens: map[string]bool{}, payments: map[string]*payment{}, byTx: map[string]*payment{}, byID: map[string]*payment{},
-		refunds: map[string]string{},
+		refunds: map[string]string{}, refundOf: map[string]customerJSON{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /oauth/token", p.handleToken)
@@ -229,14 +230,15 @@ func (p *Partner) TamperedWebhook(raw connector.RawWebhook) connector.RawWebhook
 // mã acme đã nhận lúc tạo; giao dịch chưa từng tạo thì lấy ngày hôm nay (đối tác giả, không phải connector).
 func (p *Partner) SignedWebhookOfType(typ, tx, ref string, st connector.Status, paid paykit.Money) connector.RawWebhook {
 	order := time.Now().UTC().Format("060102") + "_" + tx
+	var cust customerJSON
 	p.set(func() {
 		if pay := p.byTx[tx]; pay != nil && pay.OrderCode != "" {
-			order = pay.OrderCode
+			order, cust = pay.OrderCode, pay.Customer
 		}
 	})
 	body, _ := json.Marshal(map[string]any{
 		"event_id": "evt_" + tx + "_" + acmeStatus(st), "type": typ, "order_code": order, "payment_id": ref,
-		"status": acmeStatus(st), "amount_paid": paid.Amount, "currency": paid.Currency,
+		"status": acmeStatus(st), "amount_paid": paid.Amount, "currency": paid.Currency, "customer": cust,
 	})
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
@@ -448,8 +450,10 @@ func (p *Partner) handleRefund(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := p.refunds[in.RefundCode]; !ok {
 		p.refunds[in.RefundCode] = "pending"
+		p.refundOf[in.RefundCode] = p.byID[in.PaymentID].Customer
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"refund_id": "rf_" + in.RefundCode, "status": p.refunds[in.RefundCode]})
+	writeJSON(w, http.StatusCreated, map[string]any{"refund_id": "rf_" + in.RefundCode, "status": p.refunds[in.RefundCode],
+		"customer": p.refundOf[in.RefundCode]})
 }
 
 func (p *Partner) handleQueryRefund(w http.ResponseWriter, r *http.Request) {
@@ -461,5 +465,5 @@ func (p *Partner) handleQueryRefund(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "không có lệnh hoàn này")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"refund_id": "rf_" + code, "status": st})
+	writeJSON(w, http.StatusOK, map[string]any{"refund_id": "rf_" + code, "status": st, "customer": p.refundOf[code]})
 }

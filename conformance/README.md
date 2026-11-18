@@ -77,7 +77,7 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `RFD-1` | (có `refund`) `ModeDown`/`ModeHang`/`ModeReject`/`ModeGarbage` → như `PAY-3`/`PAY-4`/`PAY-5`/`PAY-6`. | Như các luật tương ứng của Create, cho tiền hoàn. |
 | `RFD-2` | (có `query_refund`) lệnh hoàn đối tác không biết → `Found == false`, không lỗi. | Core không đóng được lệnh hoàn chưa tới đối tác, khách không được hoàn lại. |
 | `RFD-3` | (có `query_refund`) `ModeHang` (ctx hạn 300 ms) và `ModeGarbage` → có lỗi; `err == nil` là vi phạm. | `failed` bịa ra khiến core chốt hoàn thất bại và có thể hoàn tiền cho khách hai lần; "không thấy" khiến core coi lệnh hoàn chưa tới đối tác. |
-| `LOG-1` | Create (và Charge nếu có) với khách mang chuỗi canh (tên có dấu, email có `+`, điện thoại đầu `0`, địa chỉ nhiều dòng), rồi (nếu có `query_payment`) truy vấn chính giao dịch đó: `RawExchange.RequestBody`, `ResponseBody` và câu lỗi không còn chuỗi canh ở dạng thô, JSON-escape (kể cả `\uXXXX`, `\/`), URL-encode (`QueryEscape`, `PathEscape`), khác hoa thường, (điện thoại) dạng `84…`/`+84…`, hay (địa chỉ) một dòng riêng của nó. Hoàn tiền không mang dữ liệu khách nên không kiểm. Cách so là gói `redact`, cùng thuật toán với `providerhttp.Redact` và core. | Vết lời gọi đối tác (bảng `provider_requests`) và log của core lưu dữ liệu cá nhân của khách. Core che lại lần nữa nhưng chỉ với giá trị nó biết: đối tác trả lời bằng cách viết khác (ví dụ tên tách họ/tên) thì chỉ connector che được. |
+| `LOG-1` | Khách mang chuỗi canh (tên có dấu `Huỳnh Canaryname`, email có `+`, điện thoại đầu `0`, địa chỉ nhiều dòng). Create (và Charge nếu có) mang khách đó; rồi trên chính giao dịch đó, mỗi thao tác đã khai: truy vấn, `ParseWebhook` của webhook đối tác giả ký, hoàn, truy vấn hoàn, huỷ. `RawExchange.RequestBody`, `ResponseBody`, câu lỗi và `ProviderEvent.Raw` (được phép rỗng) không còn chuỗi canh ở dạng thô, JSON-escape (kể cả `\uXXXX` hoa/thường, `\/`, JSON lồng hai lần), URL-encode (`QueryEscape`, `PathEscape`), khác hoa thường, bỏ dấu tiếng Việt (`HUYNH CANARYNAME`), (điện thoại) dạng `84…`/`+84…`/có dấu phân cách, (địa chỉ) một dòng dài của nó; và không còn một CHỮ nào của tên (có dấu hay bỏ dấu) đứng thành từ riêng (`{"first":"Canaryname","last":"Huỳnh"}`). Cách so là gói `redact`, cùng thuật toán với `providerhttp.RedactCustomer` và core. | Vết lời gọi đối tác (bảng `provider_requests`), `provider_events` và log của core lưu dữ liệu cá nhân của khách. Core che lại lần nữa nhưng chỉ với giá trị nó biết, và không che chữ của tên đã bỏ dấu khi đứng riêng (để không che thừa "Thanh toan"): connector đổi cách viết hay tách họ/tên thì chỉ connector che được. |
 | `CTX-1` | Mọi thao tác gọi mạng (Create, Charge, Query, Cancel, Refund, QueryRefund đã khai) nhận ctx đã huỷ, đối tác treo → trả về trong 2 s, không panic. | Core không dừng được lời gọi khi tắt máy hay khi khách bỏ đi. |
 
 `Harness.CreateCallsPartner == false` (Create chỉ ký tại chỗ) thì `ID-4` và `PAY-3`..`PAY-6` bị bỏ.
@@ -86,7 +86,7 @@ Mọi request bộ luật gửi mang `CreatedAt` (và `TransactionCreatedAt` ở
 gửi giá trị đã lưu, nên connector dựng mã từ `CreatedAt` tìm lại được giao dịch ở truy vấn, huỷ và hoàn.
 
 Đối tác giả nên làm như đối tác thật: nhớ khách gửi lúc tạo và nhắc lại trong phản hồi truy vấn (như
-`acmetest`), để `LOG-1` kiểm được cả việc connector che phản hồi. Che bằng `providerhttp.Redact(body, giá trị...)`.
+`acmetest`), để `LOG-1` kiểm được cả việc connector che phản hồi. Che bằng `providerhttp.RedactCustomer(body, khách)` hoặc `RedactValues(body, giá trị...)`.
 
 ## Đối tác giả
 

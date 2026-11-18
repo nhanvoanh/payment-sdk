@@ -69,9 +69,10 @@ type RefundQuerier interface {
 // RawExchange là bản ghi một lần gọi đối tác, để lưu vết.
 //
 // Hợp đồng (luật LOG-1): RequestBody và ResponseBody connector trả về KHÔNG được chứa dữ liệu cá nhân của
-// khách (tên, email, điện thoại, địa chỉ) ở bất kỳ dạng nào (thô, JSON-escape, URL-encode) cũng như dữ liệu
-// thẻ: che bằng providerhttp.Redact(body, các giá trị khách của request) trước khi trả. Đối tác nhắc lại
-// khách trong phản hồi của lệnh không mang khách (truy vấn, huỷ) thì che bằng giá trị đọc từ chính phản hồi.
+// khách (tên, từng chữ của tên, email, điện thoại, địa chỉ) ở bất kỳ dạng nào (thô, JSON-escape, URL-encode,
+// bỏ dấu) cũng như dữ liệu thẻ: che bằng providerhttp.RedactCustomer(body, khách của request) trước khi trả.
+// Đối tác nhắc lại khách trong phản hồi của lệnh không mang khách (truy vấn, huỷ, hoàn, truy vấn hoàn) thì che
+// bằng khách đọc từ chính phản hồi. Connector tự tách họ/tên hay đổi cách viết thì che cả phần đã tách/đổi.
 // Core che lại lần nữa để phòng thủ, nhưng chỉ với giá trị nó biết; câu lỗi cũng không được chứa dữ liệu khách.
 type RawExchange struct {
 	RequestBody, ResponseBody string
@@ -166,7 +167,10 @@ type ProviderEvent struct {
 	PaidAt                        time.Time
 	Card                          *paykit.CardMasked
 	ProviderCode, ProviderMessage string
-	Raw                           []byte
+	// Raw là thân thông báo core lưu vào provider_events để đối soát. Connector nên che dữ liệu khách mà đối tác
+	// nhắc lại (luật LOG-1; providerhttp.RedactCustomer) hoặc để rỗng. Core che lại theo khách của giao dịch và
+	// lọc số thẻ trước khi lưu; khử trùng theo EventID, không theo byte của Raw.
+	Raw []byte
 }
 
 // WebhookOutcome là kết quả xử lý phía core, để connector dựng phản hồi đúng định dạng đối tác.

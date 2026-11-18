@@ -86,7 +86,7 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 	if err != nil {
 		return connector.CreatePaymentResult{}, badBody(err)
 	}
-	raw := redactRaw(resp.Raw, append(body.Customer.values(), w.Customer.values()...)...)
+	raw := redactRaw(resp.Raw, req.Customer, w.Customer.customer())
 	return connector.CreatePaymentResult{ProviderRef: w.PaymentID, Status: st, NextAction: na, ExpiresAt: expires, Raw: raw}, nil
 }
 
@@ -113,7 +113,7 @@ func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPayment
 	st, _ := w.status() // đã kiểm ở validate
 	paidAt, _ := parseTime("paid_at", w.PaidAt)
 	return connector.PaymentStatus{Found: true, Status: st, ProviderRef: w.PaymentID, AmountPaid: w.paid(), PaidAt: paidAt,
-		Raw: redactRaw(resp.Raw, w.Customer.values()...)}, nil
+		Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
 }
 
 // CancelPayment huỷ thanh toán chưa trả. Acme từ chối thanh toán đã trả bằng 409 already_paid: đó là câu
@@ -142,7 +142,7 @@ func (c *Connector) CancelPayment(ctx context.Context, req connector.CancelReque
 		return connector.CancelResult{}, badBody(err)
 	}
 	st, _ := w.status()
-	return connector.CancelResult{Status: st, Raw: redactRaw(resp.Raw, w.Customer.values()...)}, nil
+	return connector.CancelResult{Status: st, Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
 }
 
 // CreateRefund tạo lệnh hoàn. Cùng luật lỗi như CreatePayment: tiền đi ra cũng không được đoán.
@@ -163,7 +163,7 @@ func (c *Connector) CreateRefund(ctx context.Context, req connector.RefundReques
 	if err != nil || w.RefundID == "" {
 		return connector.RefundResult{}, badBody(fmt.Errorf("thân hoàn tiền thiếu refund_id hoặc trạng thái lạ"))
 	}
-	return connector.RefundResult{ProviderRef: w.RefundID, Status: st, Raw: resp.Raw}, nil
+	return connector.RefundResult{ProviderRef: w.RefundID, Status: st, Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
 }
 
 // QueryRefund: như QueryPayment, 404 not_found là Found=false.
@@ -183,7 +183,7 @@ func (c *Connector) QueryRefund(ctx context.Context, req connector.QueryRefundRe
 	if err != nil || w.RefundID == "" {
 		return connector.RefundStatus{}, badBody(fmt.Errorf("thân hoàn tiền thiếu refund_id hoặc trạng thái lạ"))
 	}
-	return connector.RefundStatus{Found: true, Status: st, ProviderRef: w.RefundID, Raw: resp.Raw}, nil
+	return connector.RefundStatus{Found: true, Status: st, ProviderRef: w.RefundID, Raw: redactRaw(resp.Raw, w.Customer.customer())}, nil
 }
 
 // ParseWebhook kiểm chữ ký trên byte thô TRƯỚC khi đọc bất cứ trường nào: thân chưa xác thực là dữ liệu
@@ -212,7 +212,9 @@ func (c *Connector) ParseWebhook(_ context.Context, raw connector.RawWebhook) (c
 	paidAt, _ := parseTime("paid_at", w.PaidAt)
 	return connector.ProviderEvent{
 		EventID: w.EventID, Kind: connector.EventKindPayment, TransactionCode: tx, ProviderRef: w.PaymentID,
-		Status: st, AmountPaid: w.paid(), PaidAt: paidAt, Raw: raw.Body,
+		Status: st, AmountPaid: w.paid(), PaidAt: paidAt,
+		// Core lưu Raw vào provider_events: che khách acme nhắc lại (hợp đồng của ProviderEvent.Raw, luật LOG-1).
+		Raw: []byte(providerhttp.RedactCustomer(string(raw.Body), w.Customer.customer())),
 	}, nil
 }
 
@@ -245,11 +247,13 @@ func (c *Connector) AckWebhook(outcome connector.WebhookOutcome) (int, []byte, s
 }
 
 // redactRaw che dữ liệu khách khỏi vết trước khi trả cho core (hợp đồng của connector.RawExchange, luật LOG-1):
-// giá trị khách của request, và của phản hồi khi acme nhắc lại khách (lệnh truy vấn không mang khách nên chỉ
-// biết giá trị từ phản hồi). Phản hồi không đọc được (lỗi) thì không trả Raw nào.
-func redactRaw(raw connector.RawExchange, values ...string) connector.RawExchange {
-	raw.RequestBody = providerhttp.Redact(raw.RequestBody, values...)
-	raw.ResponseBody = providerhttp.Redact(raw.ResponseBody, values...)
+// khách của request, và khách acme nhắc lại trong phản hồi (truy vấn, huỷ, hoàn không mang khách nên chỉ biết
+// khách từ phản hồi). Phản hồi không đọc được (lỗi) thì không trả Raw nào.
+func redactRaw(raw connector.RawExchange, customers ...paykit.Customer) connector.RawExchange {
+	for _, c := range customers {
+		raw.RequestBody = providerhttp.RedactCustomer(raw.RequestBody, c)
+		raw.ResponseBody = providerhttp.RedactCustomer(raw.ResponseBody, c)
+	}
 	return raw
 }
 

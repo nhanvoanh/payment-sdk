@@ -1,6 +1,8 @@
 package conformance
 
 import (
+	"context"
+	"strings"
 	"time"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
@@ -8,31 +10,41 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
 )
 
-// logCanary là khách mang chuỗi canh của LOG-1: tên có ký tự ngoài ASCII (để thử dạng \uXXXX), email có "+"
-// (để thử URL-encode), điện thoại đầu 0 (để thử dạng 84/+84), địa chỉ nhiều dòng (để thử \n đã escape và
-// từng dòng bị tách ra trường riêng).
-var logCanary = paykit.Customer{ID: "C-LOG1", Name: "Đặng Canaryname", Email: "canary.mail+log1@example.com", Phone: "0987654321",
+// logCanary là khách mang chuỗi canh của LOG-1: tên có dấu (để thử \uXXXX và dạng bỏ dấu "HUYNH CANARYNAME" của
+// tên chủ thẻ; họ "Huỳnh" vì dạng bỏ dấu của nó không trùng một từ thông dụng), email có "+" (để thử URL-encode),
+// điện thoại đầu 0 (để thử 84/+84 và dấu phân cách), địa chỉ nhiều dòng (để thử \n đã escape và từng dòng bị
+// tách ra trường riêng).
+var logCanary = paykit.Customer{ID: "C-LOG1", Name: "Huỳnh Canaryname", Email: "canary.mail+log1@example.com", Phone: "0987654321",
 	Address: "12 Đường Canarystreet\nPhường Bến Nghé, Quận 1"}
 
-func canaryValues() []string {
-	return []string{logCanary.Name, logCanary.Email, logCanary.Phone, logCanary.Address}
-}
+// canary là cách LOG-1 dò: mọi dạng của tên, email, điện thoại, địa chỉ (cùng thuật toán với core), cộng từng
+// chữ của tên và dạng bỏ dấu của chúng (so trọn từ): connector tự tách họ/tên thì phải che phần đã tách.
+var canary = func() *redact.Redactor {
+	p := redact.Customer(logCanary.Name, logCanary.Email, logCanary.Phone, logCanary.Address)
+	for _, w := range strings.Fields(logCanary.Name) {
+		p.Words = append(p.Words, w, redact.Fold(w))
+	}
+	return redact.NewPII(p)
+}()
 
-// expectNoCustomerData: RawExchange và câu lỗi không còn dạng nào của chuỗi canh (cùng thuật toán với core).
+const leakAdvice = "cần che trước khi trả, ví dụ providerhttp.RedactCustomer(body, khách) (hoặc RedactValues với các giá trị đọc từ phản hồi); vết lời gọi đối tác, bảng provider_events và log của core sẽ lưu dữ liệu cá nhân của khách"
+
+// expectNoCustomerData: RawExchange và câu lỗi không còn dạng nào của chuỗi canh.
 func (e *env) expectNoCustomerData(what string, raw connector.RawExchange, err error) {
 	parts := []struct{ name, text string }{{"RawExchange.RequestBody", raw.RequestBody}, {"RawExchange.ResponseBody", raw.ResponseBody}}
 	if err != nil {
 		parts = append(parts, struct{ name, text string }{"câu lỗi", err.Error()})
 	}
 	for _, p := range parts {
-		if redact.Contains(p.text, canaryValues()...) {
-			e.fail("%s trả %s còn dữ liệu của khách (tên, email, điện thoại hay địa chỉ, kể cả một dòng của địa chỉ; thô, JSON-escape, URL-encode hay khác hoa thường); cần che trước khi trả, ví dụ providerhttp.Redact(body, tên, email, điện thoại, địa chỉ); vết lời gọi đối tác và log của core sẽ lưu dữ liệu cá nhân của khách", what, p.name)
+		if canary.Contains(p.text) {
+			e.fail("%s trả %s còn dữ liệu của khách (tên, một chữ của tên, email, điện thoại hay địa chỉ, kể cả một dòng của địa chỉ; thô, JSON-escape, URL-encode, bỏ dấu hay khác hoa thường); %s", what, p.name, leakAdvice)
 		}
 	}
 }
 
-// checkLOG1: mọi thao tác mang dữ liệu khách (tạo, charge) và truy vấn ngay sau đó (đối tác có thể nhắc lại
-// khách) không được trả dữ liệu khách trong RawExchange. Hoàn tiền không mang dữ liệu khách nên không kiểm.
+// checkLOG1: mọi thao tác không được trả dữ liệu khách trong RawExchange (hay câu lỗi): tạo và charge mang khách;
+// truy vấn, huỷ, hoàn, truy vấn hoàn chạy trên giao dịch đã tạo với khách đó (đối tác có thể nhắc lại khách trong
+// phản hồi); ProviderEvent.Raw của webhook của giao dịch đó (được phép rỗng) cũng phải đã che.
 func checkLOG1(e *env) {
 	e.p.SetMode(ModeNormal)
 	tx := e.tx()
@@ -55,11 +67,51 @@ func checkLOG1(e *env) {
 			e.expectNoCustomerData("Charge", cres.Raw, cerr)
 		}
 	}
-	if err == nil && e.ops[connector.OpQueryPayment] {
-		e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
-		st, ok, qerr := e.query(connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: res.ProviderRef, CreatedAt: txCreatedAt})
+	if err != nil {
+		return // các bước sau cần giao dịch đã tạo; lỗi của Create thuộc PAY-1
+	}
+	ref := res.ProviderRef
+	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
+	if e.ops[connector.OpQueryPayment] {
+		st, ok, qerr := e.query(connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref, CreatedAt: txCreatedAt})
 		if ok {
 			e.expectNoCustomerData("QueryPayment", st.Raw, qerr)
 		}
+	}
+	if e.ops[connector.OpWebhook] {
+		if ev, ok, _ := e.parse(e.signed(tx)); ok && canary.Contains(string(ev.Raw)) {
+			e.fail("ParseWebhook trả ProviderEvent.Raw còn dữ liệu của khách; trả Raw đã che hoặc rỗng; %s", leakAdvice)
+		}
+	}
+	e.logCall(connector.OpRefund, "CreateRefund", func(ctx context.Context) (connector.RawExchange, error) {
+		rf, _ := e.c.(connector.Refunder)
+		r, err := rf.CreateRefund(ctx, e.refundReq(tx, ref, "R"+tx+"L"))
+		return r.Raw, err
+	})
+	e.logCall(connector.OpQueryRefund, "QueryRefund", func(ctx context.Context) (connector.RawExchange, error) {
+		q, _ := e.c.(connector.RefundQuerier)
+		r, err := q.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx + "L", TransactionCode: tx,
+			CreatedAt: refundCreatedAt, TransactionCreatedAt: txCreatedAt})
+		return r.Raw, err
+	})
+	e.logCall(connector.OpCancel, "CancelPayment", func(ctx context.Context) (connector.RawExchange, error) {
+		c, _ := e.c.(connector.Canceler)
+		r, err := c.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref,
+			IdempotencyKey: "idem-cxl-" + tx, CreatedAt: txCreatedAt})
+		return r.Raw, err
+	})
+}
+
+// logCall chạy một thao tác đã khai trên giao dịch mang khách chuỗi canh rồi kiểm Raw và câu lỗi.
+func (e *env) logCall(op connector.Operation, what string, fn func(ctx context.Context) (connector.RawExchange, error)) {
+	if !e.ops[op] {
+		return
+	}
+	ctx, cancel := normalCtx()
+	defer cancel()
+	var raw connector.RawExchange
+	var err error
+	if e.call(what, callLimit+time.Second, func() { raw, err = fn(ctx) }) {
+		e.expectNoCustomerData(what, raw, err)
 	}
 }

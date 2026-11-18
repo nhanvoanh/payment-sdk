@@ -64,17 +64,20 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
   `X-Acme-Signature` = HMAC-SHA256 hex của toàn bộ thân với `SecretKey`. Trả 2xx để acme dừng gửi lại,
   4xx để bỏ cuộc, 5xx để gửi lại.
 - Lệnh tạo gửi `customer {id, name, email, phone, address}`; `address` (`paykit.Customer.Address`, một chuỗi có thể
-  nhiều dòng, rỗng thì bỏ trường) acme dùng để chống gian lận. Mọi phản hồi thanh toán nhắc lại `customer` đã gửi lúc tạo.
+  nhiều dòng, rỗng thì bỏ trường) acme dùng để chống gian lận. Mọi phản hồi thanh toán, hoàn tiền và webhook nhắc lại `customer` đã gửi lúc tạo.
 
 ## Không để dữ liệu khách vào vết
 
 `RawExchange` (thân request/response connector trả cho core để lưu vết) không được chứa tên, email, điện
 thoại, địa chỉ của khách hay dữ liệu thẻ (hợp đồng trong doc của `connector.RawExchange`, luật `LOG-1`).
-Acme làm ở `redactRaw`: lệnh tạo che bằng giá trị khách của request **và** của phản hồi; truy vấn và huỷ không
-mang khách nên che bằng giá trị đọc từ phản hồi. Dùng `providerhttp.Redact(body, giá trị...)`: nó thay mọi
-dạng (thô, JSON-escape, URL-encode, khác hoa thường; điện thoại cả dạng `84`/`+84`; địa chỉ nhiều dòng cả từng dòng
-riêng) bằng `[REDACTED]` và che số
-thẻ, `cvv`. Câu lỗi cũng không được chép thân phản hồi có dữ liệu khách.
+Acme làm ở `redactRaw`: lệnh tạo che bằng khách của request **và** của phản hồi; truy vấn, huỷ, hoàn, truy vấn
+hoàn không mang khách nên che bằng khách đọc từ phản hồi; `ParseWebhook` che `ProviderEvent.Raw` (core lưu nó vào
+`provider_events`) bằng khách trong thân webhook. Dùng `providerhttp.RedactCustomer(body, khách)` (hoặc
+`RedactValues(body, giá trị...)` khi chỉ có giá trị rời): nó thay mọi dạng (thô, JSON-escape, URL-encode, khác hoa
+thường, bỏ dấu; từng chữ của tên khi đứng thành từ riêng; điện thoại cả dạng `84`/`+84` và có dấu phân cách; địa
+chỉ nhiều dòng cả từng dòng dài) bằng `[REDACTED]` và che số thẻ, `cvv`. Tự tách họ/tên hay đổi cách viết (bỏ
+dấu từng chữ) thì che cả phần đã tách. Câu lỗi cũng không được chép thân phản hồi có dữ liệu khách.
+`Config.Redact` của `providerhttp` là lớp khác: che thứ cố định (token, chữ ký) trước khi thân vào `Raw`.
 
 ## Lỗi nào trả sentinel nào, và vì sao (luật tiền)
 
