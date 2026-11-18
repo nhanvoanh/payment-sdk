@@ -567,7 +567,7 @@ func TestCheck_SkipsUndeclaredOperations(t *testing.T) {
 		t.Fatalf("thao tác không khai không được sinh finding:%s", dump(r))
 	}
 	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "QRY-4", "CHG-1", "CXL-1", "CXL-2", "CXL-3",
-		"WHK-1", "WHK-2", "WHK-3", "WHK-4", "WHK-5", "WHK-6", "RFD-1", "RFD-2", "RFD-3"}
+		"CXL-4", "WHK-1", "WHK-2", "WHK-3", "WHK-4", "WHK-5", "WHK-6", "RFD-1", "RFD-2", "RFD-3"}
 	for _, code := range want {
 		for _, c := range []string{code, code + "/grpc"} {
 			if !slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, c+": ") && len(s) > len(c)+2 }) {
@@ -836,6 +836,73 @@ func TestCheck_Catches_CancelWithoutRefNotDefinite(t *testing.T) {
 	}
 }
 
+// Đối tác báo đã thu mà connector trả RejectedError: core truy vấn lại, truy vấn chậm còn báo chờ thì
+// trước đây giao dịch bị cho hết hạn trong khi khách đã trả. Phải trả "đã thu" (err nil, succeeded/on_hold).
+func TestCheck_Catches_CancelPaidAsRejected(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnCancel
+		f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+			res, err := good(ctx, req)
+			if err == nil && res.Status == connector.StatusSucceeded {
+				return connector.CancelResult{}, &connector.RejectedError{Code: "already_paid"}
+			}
+			return res, err
+		}
+		return f
+	}))
+	expectBoth(t, r, "CXL-4")
+}
+
+// Trả "đã thu" bằng on_hold cũng qua CXL-4; trả trạng thái khác (pending) thì không.
+func TestCheck_CancelPaidAnswers(t *testing.T) {
+	for st, wantFinding := range map[connector.Status]bool{connector.StatusOnHold: false, connector.StatusPending: true} {
+		t.Run(string(st), func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+				good := f.OnCancel
+				f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+					res, err := good(ctx, req)
+					if err == nil && res.Status == connector.StatusSucceeded {
+						return connector.CancelResult{Status: st}, nil
+					}
+					return res, err
+				}
+				return f
+			}))
+			if wantFinding {
+				expectBoth(t, r, "CXL-4")
+			} else if len(r.Findings) != 0 {
+				t.Fatalf("on_hold là câu trả lời \"đã thu\" hợp lệ:%s", dump(r))
+			}
+		})
+	}
+}
+
+// Connector huỷ theo mã giao dịch khi thiếu ProviderRef, và báo đối tác treo là "bị từ chối" (gọi xong rồi
+// mới đổi lỗi, hoặc đổi luôn): core hiểu là đối tác nói rõ không huỷ trong khi không ai biết lệnh huỷ đã tới chưa.
+func TestCheck_Catches_CancelWithoutRefHangAsRejected(t *testing.T) {
+	for name, waits := range map[string]bool{"chờ đối tác rồi đổi lỗi": true, "đổi lỗi ngay": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+				good := f.OnCancel
+				f.OnCancel = func(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
+					if req.ProviderRef == "" && p.currentMode() == conformance.ModeHang {
+						if waits {
+							p.hang(ctx)
+						}
+						return connector.CancelResult{}, &connector.RejectedError{Code: "timeout"}
+					}
+					return good(ctx, req)
+				}
+				return f
+			}))
+			expectBoth(t, r, "CXL-2")
+		})
+	}
+}
+
 // Các câu trả lời dứt khoát đều qua CXL-3.
 func TestCheck_CancelWithoutRefDefiniteAnswersPass(t *testing.T) {
 	for name, ans := range map[string]func() (connector.CancelResult, error){
@@ -859,8 +926,9 @@ func TestCheck_CancelWithoutRefDefiniteAnswersPass(t *testing.T) {
 				}
 				return f
 			}))
-			if slices.ContainsFunc(rules(r), func(s string) bool { return strings.HasPrefix(s, "CXL-3") }) {
-				t.Fatalf("CXL-3 bắn nhầm:%s", dump(r))
+			// Từ chối tại chỗ (không gọi đối tác) cho mọi mode cũng không phải "đổi đối tác treo thành từ chối".
+			if len(r.Findings) != 0 {
+				t.Fatalf("câu trả lời dứt khoát khi thiếu ProviderRef không được sinh finding:%s", dump(r))
 			}
 		})
 	}

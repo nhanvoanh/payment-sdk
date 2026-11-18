@@ -75,12 +75,12 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 | `not_found` khi truy vấn thanh toán hoặc hoàn tiền (theo mã lỗi của acme, bất kể mã HTTP) | `Found=false`, không lỗi | Core truy vấn cả giao dịch chưa tới được acme; lỗi ở đây khiến giao dịch không bao giờ đóng được. |
 | 5xx, 3xx, 4xx mã chưa ánh xạ hoặc không có mã | `ErrUnknownOutcome` | Acme (hoặc proxy giữa đường) đã trả lời nên có thể đã xử lý. Không bao giờ unavailable. |
 | 2xx với thân không hiểu được, thiếu trường, trạng thái lạ | `ErrUnknownOutcome` | Tiền có thể đã đi; không đoán "thất bại". |
-| Thiếu `ProviderRef` khi huỷ (ta phát hiện trước khi gửi) | `*connector.RejectedError{Code: "cannot_cancel"}`, không gọi mạng | Acme chỉ huỷ theo `ProviderRef`, không theo `TransactionCode`: giao dịch chưa có `ProviderRef` (Create chưa nghe được trả lời) thì biết chắc không huỷ được bằng thông tin được cho. Câu trả lời phải dứt khoát: với Rejected, core truy vấn lại rồi mới quyết (acme không biết giao dịch thì cho hết hạn; acme báo đã thu thì ghi đã trả). `ErrProviderUnavailable` ở đây làm core hiểu là "không rõ" và không bao giờ cho giao dịch hết hạn (luật `CXL-3`). |
+| Thiếu `ProviderRef` khi huỷ (ta phát hiện trước khi gửi) | `*connector.RejectedError{Code: "cannot_cancel"}`, không gọi mạng | Acme chỉ huỷ theo `ProviderRef`, không theo `TransactionCode`: giao dịch chưa có `ProviderRef` (Create chưa nghe được trả lời) thì biết chắc không huỷ được bằng thông tin được cho. Câu trả lời phải dứt khoát: với Rejected, core truy vấn lại rồi mới quyết (acme không biết giao dịch thì cho hết hạn; acme báo đã thu thì ghi đã trả; acme còn giữ thanh toán đang chờ thì không hết hạn, lượt sau quyết). Từ chối ở đây là quyết định tại chỗ nên giống nhau dù acme bình thường hay treo (lượt thêm của `CXL-2`). `ErrProviderUnavailable` ở đây làm core hiểu là "không rõ" và không bao giờ cho giao dịch hết hạn (luật `CXL-3`). |
 | Thiếu `ProviderRef` khi hoàn (ta phát hiện trước khi gửi) | `ErrProviderUnavailable` | Chắc chắn chưa gửi gì. |
 | Phản hồi tạo thanh toán có `order_code` khác mã đã gửi | `ErrUnknownOutcome` | Không tin phản hồi về giao dịch khác. |
 | Webhook sai chữ ký | `ErrInvalidSignature` | Kiểm trên byte thô trước khi đọc thân. |
 | Webhook loại không liên quan | `ErrEventNotRelevant` | Đã xác thực nhưng không có gì để áp. |
-| Huỷ thanh toán đã trả | `RejectedError` (409 `already_paid`) | Không bao giờ tự báo `canceled` khi acme không nói vậy. |
+| Huỷ thanh toán đã trả | `CancelResult{Status: connector.StatusSucceeded}`, err nil (409 `already_paid`) | Đây là câu trả lời "đã thu", không phải từ chối: core không bao giờ cho hết hạn ở lượt đó. Trả `RejectedError` thì core truy vấn lại, và nếu truy vấn của acme còn chậm (báo chờ) thì giao dịch khách đã trả bị xử lý như chưa trả (luật `CXL-4`). Không bao giờ tự báo `canceled` khi acme không nói vậy. |
 
 ### Mã lỗi acme theo từng thao tác
 
@@ -90,7 +90,7 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 | Mã | Tạo thanh toán | Huỷ | Hoàn tiền | Truy vấn |
 |---|---|---|---|---|
 | `declined`, `invalid_request` | Rejected | Rejected | Rejected | Unknown |
-| `already_paid` | **Unknown** (acme đã thu tiền, ví dụ lệnh tạo trước thất lạc phản hồi) | Rejected (không huỷ được, tiền ở lại acme) | **Unknown** | Unknown |
+| `already_paid` | **Unknown** (acme đã thu tiền, ví dụ lệnh tạo trước thất lạc phản hồi) | **"Đã thu"**: `Status succeeded`, err nil (không nằm trong `rejectCancel`) | **Unknown** | Unknown |
 | `not_found` | Unknown | Rejected | Rejected | `Found=false` (theo mã, bất kể mã HTTP) |
 | mã khác hoặc không có mã | Unknown | Unknown | Unknown | Unknown |
 
@@ -98,8 +98,8 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 
 Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã luật: `ID-1`..`ID-3` (tên, phương thức,
 khai năng lực), `PAY-1`..`PAY-7` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
-từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-4` (truy vấn), `CHG-1` (thu ngay), `CXL-1`..`CXL-3` (huỷ: không báo `canceled` khi
-đã thu, khi treo hay thân rác; trả lời dứt khoát khi thiếu `ProviderRef`), `WHK-1`..`WHK-6`
+từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-4` (truy vấn), `CHG-1` (thu ngay), `CXL-1`..`CXL-4` (huỷ: không báo `canceled` khi
+đã thu, khi treo hay thân rác; không đổi đối tác treo thành từ chối, kể cả khi thiếu `ProviderRef`; trả lời dứt khoát khi thiếu `ProviderRef`; đã thu thì trả "đã thu", không từ chối), `WHK-1`..`WHK-6`
 (webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-3` (hoàn tiền), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
 
 ## Test

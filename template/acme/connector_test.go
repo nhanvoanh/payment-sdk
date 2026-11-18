@@ -401,7 +401,8 @@ func errorStub(t *testing.T, status int, code string) *acme.Connector {
 	return c
 }
 
-// already_paid khi TẠO nghĩa là acme đã thu tiền (lệnh trước bị thất lạc phản hồi): không bao giờ Rejected.
+// already_paid khi TẠO nghĩa là acme đã thu tiền (lệnh trước bị thất lạc phản hồi): không bao giờ Rejected;
+// khi HUỶ cũng là "đã thu".
 func TestAcme_AlreadyPaidMeaningDependsOnOperation(t *testing.T) {
 	ctx := context.Background()
 	_, err := errorStub(t, 409, "already_paid").CreatePayment(ctx, createReq("TAP"))
@@ -412,10 +413,10 @@ func TestAcme_AlreadyPaidMeaningDependsOnOperation(t *testing.T) {
 	if !errors.Is(err, connector.ErrUnknownOutcome) || errors.Is(err, connector.ErrProviderRejected) {
 		t.Errorf("hoàn: err = %v, cần ErrUnknownOutcome", err)
 	}
-	_, err = errorStub(t, 409, "already_paid").CancelPayment(ctx, connector.CancelRequest{ProviderRef: "p"})
-	var rej *connector.RejectedError
-	if !errors.As(err, &rej) || rej.Code != "already_paid" {
-		t.Errorf("huỷ: err = %v, cần RejectedError already_paid", err)
+	// Huỷ: already_paid là câu trả lời "đã thu", không phải từ chối (core không bao giờ cho hết hạn).
+	res, err := errorStub(t, 409, "already_paid").CancelPayment(ctx, connector.CancelRequest{ProviderRef: "p"})
+	if err != nil || res.Status != connector.StatusSucceeded {
+		t.Errorf("huỷ: (%v, %v), cần Status succeeded, err nil", res.Status, err)
 	}
 }
 

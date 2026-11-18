@@ -7,10 +7,11 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
 )
 
-// rule là một luật; op khác rỗng nghĩa là chỉ áp khi connector khai thao tác đó.
+// rule là một luật; op (và alsoOp) khác rỗng nghĩa là chỉ áp khi connector khai thao tác đó.
 type rule struct {
 	id            string
 	op            connector.Operation
+	alsoOp        connector.Operation
 	createPartner bool   // cần Create gọi đối tác (Harness.CreateCallsPartner)
 	grpcSkip      string // khác rỗng: lượt /grpc theo thiết kế không kiểm được gì (vào NotChecked với lý do này)
 	check         func(e *env)
@@ -36,6 +37,7 @@ var rules = []rule{
 	{id: "CXL-1", op: connector.OpCancel, check: checkCXL1},
 	{id: "CXL-2", op: connector.OpCancel, check: checkCXL2},
 	{id: "CXL-3", op: connector.OpCancel, check: checkCXL3},
+	{id: "CXL-4", op: connector.OpCancel, alsoOp: connector.OpQueryPayment, check: checkCXL4},
 	{id: "WHK-1", op: connector.OpWebhook, check: checkWHK1},
 	{id: "WHK-2", op: connector.OpWebhook, check: checkWHK2},
 	{id: "WHK-3", op: connector.OpWebhook, check: checkWHK3},
@@ -86,8 +88,10 @@ func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]stri
 	}
 	c, p := h.New(tb)
 	e := &env{h: h, c: c, orig: c, p: p, rule: code, ops: declared(c)}
-	if r.op != "" && !e.ops[r.op] {
-		return nil, "connector không khai thao tác " + string(r.op), ""
+	for _, op := range []connector.Operation{r.op, r.alsoOp} {
+		if op != "" && !e.ops[op] {
+			return nil, "connector không khai thao tác " + string(op), ""
+		}
 	}
 	if viaGRPC && r.grpcSkip != "" {
 		return nil, "", r.grpcSkip

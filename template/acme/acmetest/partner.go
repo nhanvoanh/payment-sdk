@@ -55,6 +55,7 @@ type Partner struct {
 	seq      int
 
 	rejectAuth, failTokens, fail5xx        bool
+	refuseCancel, lagQueries               bool
 	tokenFetches, paymentAttempts, created int
 }
 
@@ -111,6 +112,12 @@ func (p *Partner) FailTokens(on bool) { p.set(func() { p.failTokens = on }) }
 
 // Fail5xx: request nghiệp vụ trả 503 (đối tác không nói gì về việc đã xử lý hay chưa).
 func (p *Partner) Fail5xx(on bool) { p.set(func() { p.fail5xx = on }) }
+
+// RefuseCancel bật thì acme từ chối mọi lệnh huỷ bằng 422 declined, kể cả thanh toán còn chờ khách trả.
+func (p *Partner) RefuseCancel(on bool) { p.set(func() { p.refuseCancel = on }) }
+
+// LagQueries bật thì truy vấn báo thanh toán đã trả là còn chờ, như chỉ mục tra cứu của acme bị chậm.
+func (p *Partner) LagQueries(on bool) { p.set(func() { p.lagQueries = on }) }
 
 func (p *Partner) set(f func()) {
 	p.mu.Lock()
@@ -317,7 +324,11 @@ func (p *Partner) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "không có giao dịch này")
 		return
 	}
-	writeJSON(w, http.StatusOK, pay.json())
+	out := pay.json()
+	if p.lagQueries && out.Status == "paid" {
+		out.Status, out.AmountPaid, out.Currency = "pending", 0, ""
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (p *Partner) handleCancel(w http.ResponseWriter, r *http.Request) {
@@ -327,6 +338,8 @@ func (p *Partner) handleCancel(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case pay == nil:
 		writeError(w, http.StatusNotFound, "not_found", "không có giao dịch này")
+	case p.refuseCancel:
+		writeError(w, http.StatusUnprocessableEntity, "declined", "acme không cho huỷ giao dịch này")
 	case pay.Status == "paid":
 		writeError(w, http.StatusConflict, "already_paid", "giao dịch đã thanh toán, không huỷ được")
 	default:

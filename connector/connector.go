@@ -43,6 +43,13 @@ type Charger interface {
 // connector đặt (ví dụ "cannot_cancel"); core sẽ truy vấn lại rồi mới quyết. KHÔNG trả ErrProviderUnavailable
 // hay ErrUnknownOutcome trong trường hợp đó: core hiểu là "không rõ" và không bao giờ cho giao dịch hết hạn.
 // Unavailable/Unknown chỉ dành cho khi đã cố gọi đối tác mà không tới hoặc không rõ kết quả (luật CXL-3).
+// Từ chối như vậy là quyết định tại chỗ; đã gọi đối tác mà không nghe được trả lời thì là ErrUnknownOutcome,
+// không bao giờ RejectedError (luật CXL-2).
+//
+// Đối tác trả lời "đã thu rồi, không huỷ được" thì trả CancelResult{Status: StatusSucceeded} (hoặc StatusOnHold)
+// với err nil, KHÔNG trả RejectedError: với câu trả lời "đã thu" core không bao giờ cho hết hạn ở lượt đó, còn
+// với lời từ chối core truy vấn lại và quyết theo truy vấn, có thể còn chậm (luật CXL-4). Bị từ chối mà truy vấn
+// lại thấy đối tác vẫn giữ thanh toán chưa kết thúc thì core không cho hết hạn; không thấy thì cho hết hạn.
 type Canceler interface {
 	CancelPayment(ctx context.Context, req CancelRequest) (CancelResult, error)
 }

@@ -111,8 +111,9 @@ func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPayment
 	return connector.PaymentStatus{Found: true, Status: st, ProviderRef: w.PaymentID, AmountPaid: w.paid(), PaidAt: paidAt, Raw: resp.Raw}, nil
 }
 
-// CancelPayment huỷ thanh toán chưa trả. Acme từ chối thanh toán đã trả bằng 409 already_paid, tức
-// RejectedError; ta không bao giờ tự báo "canceled" nếu acme không nói vậy (core sẽ huỷ đơn của khách đã trả tiền).
+// CancelPayment huỷ thanh toán chưa trả. Acme từ chối thanh toán đã trả bằng 409 already_paid: đó là câu
+// trả lời "đã thu", nên trả Status succeeded với err nil (core không bao giờ cho hết hạn ở lượt đó), không
+// phải RejectedError. Ta không bao giờ tự báo "canceled" nếu acme không nói vậy (core sẽ huỷ đơn của khách đã trả tiền).
 //
 // Acme chỉ huỷ theo payment_id. Thiếu ProviderRef (Create chưa nghe được trả lời) thì biết chắc không huỷ được
 // bằng thông tin được cho: trả lời dứt khoát cannot_cancel, không gọi mạng. Không trả ErrProviderUnavailable:
@@ -124,6 +125,9 @@ func (c *Connector) CancelPayment(ctx context.Context, req connector.CancelReque
 	resp, err := c.send(ctx, http.MethodPost, pathPayments+"/"+url.PathEscape(req.ProviderRef)+"/cancel", nil, req.IdempotencyKey, struct{}{})
 	if err != nil {
 		return connector.CancelResult{}, err
+	}
+	if code, _, ok := errorCode(resp.Body); ok && code == "already_paid" && resp.Status >= 400 && resp.Status < 500 {
+		return connector.CancelResult{Status: connector.StatusSucceeded, Raw: resp.Raw}, nil
 	}
 	var w paymentJSON
 	if err := reply(resp, &w, rejectCancel); err != nil {
@@ -343,8 +347,9 @@ var (
 	// Tạo: declined (acme từ chối thu) và invalid_request (request sai, chưa tạo gì) là cuối cùng.
 	// already_paid KHÔNG ở đây: lệnh tạo trước bị thất lạc phản hồi rồi gửi lại thì nó nghĩa là acme ĐÃ thu tiền.
 	rejectCreate = map[string]bool{"declined": true, "invalid_request": true}
-	// Huỷ: already_paid là từ chối đúng (không huỷ được, tiền vẫn ở acme); not_found: không có gì để huỷ.
-	rejectCancel = map[string]bool{"declined": true, "invalid_request": true, "already_paid": true, "not_found": true}
+	// Huỷ: not_found là không có gì để huỷ. already_paid KHÔNG ở đây: nó là "đã thu" (CancelPayment trả
+	// succeeded), vì từ chối thì core truy vấn lại và có thể cho hết hạn khi truy vấn còn chậm.
+	rejectCancel = map[string]bool{"declined": true, "invalid_request": true, "not_found": true}
 	// Hoàn: declined và invalid_request chưa hoàn gì; not_found: giao dịch gốc không tồn tại nên không có gì để hoàn.
 	rejectRefund = map[string]bool{"declined": true, "invalid_request": true, "not_found": true}
 	// Truy vấn không có "từ chối": nil. not_found là Found=false (isNotFound), mã khác là chưa rõ.

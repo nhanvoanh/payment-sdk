@@ -394,6 +394,81 @@ func checkCXL2(e *env) {
 			e.fail("CancelPayment %s trả %v (core hiểu là %s); cần ErrUnknownOutcome; core tin chắc một kết quả huỷ mà không ai biết, đơn và tiền của khách lệch nhau", situation, err, outcomeText(err))
 		}
 	}
+	e.cancelWithoutRefOnHang(tx)
+}
+
+// cancelWithoutRefOnHang: lượt thêm của CXL-2 — huỷ thiếu ProviderRef (connector có thể huỷ theo mã giao dịch)
+// khi đối tác treo. Từ chối chỉ được là quyết định tại chỗ, không phụ thuộc đối tác: trả về trước hạn ctx và
+// giống hệt câu trả lời khi đối tác bình thường. Ngược lại là đổi "đối tác treo" thành "bị từ chối".
+func (e *env) cancelWithoutRefOnHang(tx string) {
+	cn, _ := e.c.(connector.Canceler)
+	req := connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-noref-" + tx}
+	var res connector.CancelResult
+	start := time.Now()
+	ok, err := e.modeCall(ModeHang, "CancelPayment thiếu ProviderRef", func(ctx context.Context) error {
+		var err error
+		res, err = cn.CancelPayment(ctx, req)
+		return err
+	})
+	elapsed := time.Since(start)
+	if !ok {
+		return
+	}
+	const situation = "thiếu ProviderRef khi hết hạn chờ đối tác"
+	switch {
+	case err == nil && res.Status == connector.StatusCanceled:
+		e.fail("CancelPayment %s trả Status canceled, err nil; cần lỗi chưa rõ kết quả hoặc trạng thái khác canceled; core huỷ đơn trong khi đối tác có thể vẫn thu tiền của khách", situation)
+	case connector.Classify(err) == connector.CallRejected:
+		if elapsed < hangCtx && e.sameRejectionWhenNormal(req) {
+			return // từ chối tại chỗ, không gọi đối tác (ví dụ chỉ huỷ được theo ProviderRef, xem CXL-3)
+		}
+		e.fail("CancelPayment %s trả %v (core hiểu là bị từ chối chắc chắn) sau %v; cần ErrUnknownOutcome, vì không ai biết lệnh huỷ đã tới đối tác chưa; từ chối chỉ hợp lệ khi là quyết định tại chỗ (trả ngay, và trả đúng như vậy khi đối tác bình thường); core tin đối tác nói rõ không huỷ và quyết theo một câu trả lời không có", situation, err, elapsed.Round(time.Millisecond))
+	}
+}
+
+// sameRejectionWhenNormal: cùng lệnh huỷ ở ModeNormal cũng bị từ chối, tức lời từ chối không đến từ đối tác treo.
+func (e *env) sameRejectionWhenNormal(req connector.CancelRequest) bool {
+	cn, _ := e.c.(connector.Canceler)
+	e.p.SetMode(ModeNormal)
+	ctx, cancel := normalCtx()
+	defer cancel()
+	var err error
+	if !e.call("CancelPayment thiếu ProviderRef", callLimit+time.Second, func() { _, err = cn.CancelPayment(ctx, req) }) {
+		return true // lỗi treo/panic đã thành finding riêng
+	}
+	return connector.Classify(err) == connector.CallRejected
+}
+
+// checkCXL4: đối tác báo đã thu khi huỷ mà connector trả RejectedError thì core truy vấn lại; truy vấn còn
+// chậm (báo chờ) là đủ để core hiểu "đối tác không biết đã thu". Câu trả lời "đã thu" phải là err nil kèm
+// succeeded hoặc on_hold: core không bao giờ cho hết hạn ở lượt đó.
+func checkCXL4(e *env) {
+	tx := e.tx()
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
+	e.p.SetMode(ModeNormal)
+	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
+	cn, _ := e.c.(connector.Canceler)
+	ctx, cancel := normalCtx()
+	defer cancel()
+	var res connector.CancelResult
+	var err error
+	if !e.call("CancelPayment", callLimit+time.Second, func() {
+		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx})
+	}) {
+		return
+	}
+	// canceled kèm err nil là vi phạm của CXL-1, không báo hai lần.
+	if err == nil && (res.Status == connector.StatusSucceeded || res.Status == connector.StatusOnHold || res.Status == connector.StatusCanceled) {
+		return
+	}
+	got := errText(err) + " (core hiểu là " + outcomeText(err) + ")"
+	if err == nil {
+		got = "Status " + string(res.Status) + ", err nil"
+	}
+	e.fail("CancelPayment cho giao dịch đối tác báo đã thanh toán trả %s; cần err nil kèm Status succeeded hoặc on_hold, không phải RejectedError; core truy vấn lại, truy vấn của đối tác còn chậm thì giao dịch khách đã trả bị cho hết hạn", got)
 }
 
 // checkCXL3: core huỷ cả giao dịch mà Create chưa nghe được trả lời (không có ProviderRef, đối tác có thể không
