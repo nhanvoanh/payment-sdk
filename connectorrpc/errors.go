@@ -8,8 +8,9 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
 )
 
-// ErrorToProto xếp lỗi của connector vào ConnectorError. Thứ tự xét giống paymentsvc.classify:
-// ErrUnknownOutcome trước, rồi ErrProviderRejected, rồi ErrProviderUnavailable/ErrNotSupported.
+// ErrorToProto xếp lỗi của connector vào ConnectorError. Thứ tự xét giống connector.Classify:
+// ErrUnknownOutcome trước, rồi ErrProviderRejected, rồi ErrProviderUnavailable/ErrNotSupported
+// (TestErrorToProto_AgreesWithClassify kiểm mọi tổ hợp sentinel).
 // Lỗi không thuộc sentinel nào là không rõ kết quả, không bao giờ suy ra thất bại.
 func ErrorToProto(err error) *connectorpb.ConnectorError {
 	if err == nil {

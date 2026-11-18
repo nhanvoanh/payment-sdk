@@ -115,43 +115,16 @@ func containsControl(s string) bool {
 	return false
 }
 
-// outcome là cách core hiểu một lỗi của connector.
-type outcome int
-
-const (
-	outcomeOK outcome = iota
-	outcomeUnknown
-	outcomeRejected
-	outcomeUnavailable // core chốt "chắc chắn chưa xử lý"
-)
-
-// coreOutcome phản chiếu paymentsvc.classify của core (SDK không import core, nên chép lại; hai nơi phải
-// khớp): ErrUnknownOutcome xét trước, rồi ErrProviderRejected, rồi ErrProviderUnavailable/ErrNotSupported;
-// lỗi khác là chưa rõ.
-func coreOutcome(err error) outcome {
-	switch {
-	case err == nil:
-		return outcomeOK
-	case errors.Is(err, connector.ErrUnknownOutcome):
-		return outcomeUnknown
-	case errors.Is(err, connector.ErrProviderRejected):
-		return outcomeRejected
-	case errors.Is(err, connector.ErrProviderUnavailable), errors.Is(err, connector.ErrNotSupported):
-		return outcomeUnavailable
-	}
-	return outcomeUnknown
-}
-
 // isUnknownForCore: core giữ giao dịch ở trạng thái chờ truy vấn, không chốt thất bại.
-func isUnknownForCore(err error) bool { return coreOutcome(err) == outcomeUnknown }
+func isUnknownForCore(err error) bool { return connector.Classify(err) == connector.CallUnknown }
 
 func outcomeText(err error) string {
-	switch coreOutcome(err) {
-	case outcomeOK:
+	switch connector.Classify(err) {
+	case connector.CallOK:
 		return "thành công"
-	case outcomeRejected:
+	case connector.CallRejected:
 		return "bị từ chối chắc chắn"
-	case outcomeUnavailable:
+	case connector.CallUnavailable:
 		return "chắc chắn chưa xử lý"
 	}
 	return "chưa rõ kết quả"
@@ -182,7 +155,7 @@ func (e *env) modeCall(m Mode, what string, fn func(ctx context.Context) error) 
 // expectUnavailable: đối tác từ chối kết nối thì core phải hiểu là "chắc chắn chưa xử lý".
 func (e *env) expectUnavailable(what string, fn func(ctx context.Context) error) {
 	ok, err := e.modeCall(ModeDown, what, fn)
-	if ok && (!errors.Is(err, connector.ErrProviderUnavailable) || coreOutcome(err) != outcomeUnavailable) {
+	if ok && (!errors.Is(err, connector.ErrProviderUnavailable) || connector.Classify(err) != connector.CallUnavailable) {
 		e.fail("%s khi đối tác từ chối kết nối trả %v (core hiểu là %s); cần lỗi khớp ErrProviderUnavailable và không khớp ErrUnknownOutcome hay ErrProviderRejected; core không chốt thất bại được, giao dịch treo chờ truy vấn và khách không tạo lại thanh toán ngay được", what, errText(err), outcomeText(err))
 	}
 }
@@ -190,7 +163,7 @@ func (e *env) expectUnavailable(what string, fn func(ctx context.Context) error)
 // expectRejected: đối tác từ chối rõ ràng thì core phải hiểu là "bị từ chối".
 func (e *env) expectRejected(what string, fn func(ctx context.Context) error) {
 	ok, err := e.modeCall(ModeReject, what, fn)
-	if ok && coreOutcome(err) != outcomeRejected {
+	if ok && connector.Classify(err) != connector.CallRejected {
 		e.fail("%s khi đối tác từ chối rõ ràng trả %v (core hiểu là %s); cần lỗi khớp ErrProviderRejected (nên dùng RejectedError) và không khớp ErrUnknownOutcome; core không chốt thất bại được, giao dịch treo và khách phải chờ", what, errText(err), outcomeText(err))
 	}
 }
@@ -440,9 +413,9 @@ func checkCXL3(e *env) {
 	// Cùng thứ tự với cách core hiểu một câu trả lời huỷ: chưa rõ trước, rồi không hỗ trợ, rồi từ chối.
 	switch {
 	case err == nil:
-	case coreOutcome(err) == outcomeUnknown:
+	case connector.Classify(err) == connector.CallUnknown:
 		e.fail("CancelPayment cho giao dịch đối tác không biết, ProviderRef rỗng, trả %v (core hiểu là chưa rõ kết quả); cần câu trả lời dứt khoát: trạng thái (err nil), RejectedError (ví dụ mã cannot_cancel) hoặc ErrNotSupported; core không bao giờ cho giao dịch quá hạn hết hạn, đơn của khách kẹt tới khi có người chốt tay", errText(err))
-	case errors.Is(err, connector.ErrNotSupported), coreOutcome(err) == outcomeRejected:
+	case errors.Is(err, connector.ErrNotSupported), connector.Classify(err) == connector.CallRejected:
 	default:
 		e.fail("CancelPayment cho giao dịch đối tác không biết, ProviderRef rỗng, trả %v (core hiểu là đối tác không trả lời được); cần câu trả lời dứt khoát: trạng thái (err nil), RejectedError (ví dụ mã cannot_cancel) hoặc ErrNotSupported; ErrProviderUnavailable chỉ dành cho khi đã cố gọi đối tác mà không tới; core không bao giờ cho giao dịch quá hạn hết hạn và mỗi lượt quét làm cầu chì đếm thêm một lỗi", errText(err))
 	}

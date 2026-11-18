@@ -95,3 +95,21 @@ func TestErrorFromProto_MessageNotDuplicated(t *testing.T) {
 	err := connectorrpc.ErrorFromProto(connectorrpc.ErrorToProto(connector.ErrProviderUnavailable))
 	assert.Equal(t, connector.ErrProviderUnavailable.Error(), err.Error())
 }
+
+// ErrorToProto có thứ tự xét riêng (thêm chữ ký sai, sự kiện không liên quan) nhưng mọi tổ hợp sentinel đi
+// qua dây phải được core phân loại đúng như lỗi gốc: một khác biệt là connector nói một đằng, core hiểu một nẻo.
+func TestErrorToProto_AgreesWithClassify(t *testing.T) {
+	sentinels := []error{connector.ErrUnknownOutcome, &connector.RejectedError{Code: "c", Message: "m"},
+		connector.ErrProviderUnavailable, connector.ErrNotSupported, connector.ErrInvalidSignature, connector.ErrEventNotRelevant}
+	for mask := 0; mask < 1<<len(sentinels); mask++ {
+		errs := []error{errors.New("gốc")}
+		for i, s := range sentinels {
+			if mask&(1<<i) != 0 {
+				errs = append(errs, s)
+			}
+		}
+		in := errors.Join(errs...)
+		got := connectorrpc.ErrorFromProto(wire(t, connectorrpc.ErrorToProto(in)))
+		assert.Equal(t, connector.Classify(in), connector.Classify(got), "tổ hợp %b: %v", mask, in)
+	}
+}
