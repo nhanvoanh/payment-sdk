@@ -9,19 +9,80 @@ import (
 // ntext là văn bản đã chuẩn hoá: b[i] đến từ byte gốc pos[i]; pos có thêm phần tử cuối = len(gốc), nên khoảng
 // chuẩn hoá [i, j) ứng với khoảng gốc [pos[i], pos[j]).
 type ntext struct {
-	b   []byte
-	pos []int32
+	b     []byte
+	pos   []int32
+	track bool // ghi pos (bản chuẩn hoá của giá trị thì không cần)
 }
 
+// normString chuẩn hoá một giá trị (không cần bảng vị trí).
 func normString(s string, fold bool) string {
-	return strings.TrimSpace(string(normalize(s, fold).b))
+	if hasPercentHex(s) {
+		s, _ = percentDecode(s)
+	}
+	n := ntext{b: make([]byte, 0, len(s))}
+	n.run(s, fold)
+	return strings.TrimSpace(string(n.b))
 }
 
-// normalize giải mã \uXXXX (một hoặc hai dấu "\", kể cả cặp thay thế), \n \r \t \/ \" và %HH (nhiều byte UTF-8);
+// hasPercentHex: s có ít nhất một "%HH".
+func hasPercentHex(s string) bool {
+	for i := strings.IndexByte(s, '%'); i >= 0 && i+2 < len(s); {
+		if isHex(s[i+1]) && isHex(s[i+2]) {
+			return true
+		}
+		k := strings.IndexByte(s[i+1:], '%')
+		if k < 0 {
+			return false
+		}
+		i += k + 1
+	}
+	return false
+}
+
+// percentDecode giải mọi "%HH" thành byte, kèm vị trí gốc của từng byte (phần tử cuối = len(s)).
+func percentDecode(s string) (string, []int32) {
+	b := make([]byte, 0, len(s))
+	pos := make([]int32, 0, len(s)+1)
+	for i := 0; i < len(s); {
+		if s[i] == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
+			b = append(b, unhex(s[i+1])<<4|unhex(s[i+2]))
+			pos = append(pos, int32(i))
+			i += 3
+			continue
+		}
+		b = append(b, s[i])
+		pos = append(pos, int32(i))
+		i++
+	}
+	return string(b), append(pos, int32(len(s)))
+}
+
+// normalize: percent (và s có %HH) thì giải %HH TRƯỚC (một lượt, có ánh xạ vị trí) rồi chuẩn hoá phần đã giải, nên
+// chuỗi thoát JSON nằm trong %HH (JSON lồng trong form: %5Cn, %5Cu0110) cũng được giải; dấu nối đã mã hoá ("+-+",
+// "%20-%20", "%2C+") thành dấu cách như dạng thô.
+func normalize(s string, fold, percent bool) ntext {
+	if !percent || !hasPercentHex(s) {
+		return normalizeRaw(s, fold)
+	}
+	d, dpos := percentDecode(s)
+	n := normalizeRaw(d, fold)
+	for i, p := range n.pos {
+		n.pos[i] = dpos[p]
+	}
+	return n
+}
+
+// normalizeRaw giải mã \uXXXX (một hoặc hai dấu "\", kể cả cặp thay thế), \n \r \t \/ \" (KHÔNG giải %HH);
 // "+" , dấu cách, xuống dòng, "," và " - " thành MỘT dấu cách; chữ thường; fold: bỏ dấu tiếng Việt và dấu kết hợp.
 // Byte không phải UTF-8 được giữ nguyên. Không bao giờ panic.
-func normalize(s string, fold bool) ntext {
-	n := ntext{b: make([]byte, 0, len(s)), pos: make([]int32, 0, len(s)+1)}
+func normalizeRaw(s string, fold bool) ntext {
+	n := ntext{b: make([]byte, 0, len(s)), pos: make([]int32, 0, len(s)+1), track: true}
+	n.run(s, fold)
+	n.pos = append(n.pos, int32(len(s)))
+	return n
+}
+
+func (n *ntext) run(s string, fold bool) {
 	for i := 0; i < len(s); {
 		c := s[i]
 		switch c {
@@ -31,13 +92,8 @@ func normalize(s string, fold bool) ntext {
 				i = end
 				continue
 			}
-		case '%':
-			if end, ok := n.percent(s, i, fold); ok {
-				i = end
-				continue
-			}
 		case '-':
-			if len(n.b) > 0 && n.b[len(n.b)-1] == ' ' && i+1 < len(s) && s[i+1] == ' ' {
+			if len(n.b) > 0 && n.b[len(n.b)-1] == ' ' && i+1 < len(s) && (s[i+1] == ' ' || s[i+1] == '+' || s[i+1] == '\t') {
 				n.sep(i)
 				i++
 				continue
@@ -57,13 +113,13 @@ func normalize(s string, fold bool) ntext {
 		n.rune(r, i, fold)
 		i += size
 	}
-	n.pos = append(n.pos, int32(len(s)))
-	return n
 }
 
 func (n *ntext) raw(c byte, at int) {
 	n.b = append(n.b, c)
-	n.pos = append(n.pos, int32(at))
+	if n.track {
+		n.pos = append(n.pos, int32(at))
+	}
 }
 
 func (n *ntext) sep(at int) {
@@ -107,33 +163,6 @@ func (n *ntext) rune(r rune, at int, fold bool) {
 	for _, c := range buf[:utf8.EncodeRune(buf[:], r)] {
 		n.raw(c, at)
 	}
-}
-
-// percent giải mã một chuỗi %HH liền nhau như các byte UTF-8; mỗi ký tự trỏ về "%" của byte đầu của nó.
-func (n *ntext) percent(s string, i int, fold bool) (int, bool) {
-	var buf [64]byte
-	var offs [64]int
-	k, j := 0, i
-	for k < len(buf) && j+2 < len(s) && s[j] == '%' && isHex(s[j+1]) && isHex(s[j+2]) {
-		buf[k], offs[k] = unhex(s[j+1])<<4|unhex(s[j+2]), j
-		k++
-		j += 3
-	}
-	if k == 0 {
-		return i, false
-	}
-	for p := 0; p < k; {
-		r, size := utf8.DecodeRune(buf[p:k])
-		switch {
-		case r == utf8.RuneError && size <= 1:
-			n.raw(buf[p], offs[p])
-			size = 1
-		default:
-			n.rune(r, offs[p], fold)
-		}
-		p += size
-	}
-	return j, true
 }
 
 // backslash giải mã một chuỗi thoát JSON bắt đầu ở i (một hoặc hai dấu "\" — JSON lồng hai lần).

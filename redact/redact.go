@@ -25,8 +25,8 @@
 package redact
 
 import (
+	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -71,7 +71,7 @@ type wordInfo struct{ strong string } // strong: dạng có dấu (chữ thườ
 type Redactor struct {
 	full   []string            // chuỗi con
 	comps  []string            // thành phần địa chỉ, trọn từ
-	addr   map[string]bool     // thành phần địa chỉ (cho trường gợi ý địa chỉ)
+	addr   [][]string          // thành phần địa chỉ đã chuẩn hoá, theo thứ tự, mỗi địa chỉ một dãy (trường gợi ý địa chỉ)
 	words  map[string]wordInfo // chữ của tên (đã chuẩn hoá, bỏ dấu)
 	phones map[string]bool     // dãy chữ số của điện thoại ở mọi đầu số
 	maxPh  int
@@ -95,20 +95,41 @@ func NewPII(p PII) *Redactor {
 			r.full = append(r.full, n)
 		}
 	}
+	addNorm := func(n string) { // n đã chuẩn hoá
+		if utf8.RuneCountInString(n) >= MinValueRunes && !seen[n] {
+			seen[n] = true
+			r.full = append(r.full, n)
+		}
+	}
 	addAddress := func(a string) {
-		addFull(a)
-		for _, c := range components(a) {
-			n := normString(c, true)
-			if utf8.RuneCountInString(n) < MinWordRunes {
-				continue
+		// Bản chuẩn hoá gộp mọi dấu nối (xuống dòng, ", ", " - ") thành một dấu cách, nên địa chỉ trọn và dòng trọn
+		// chính là các thành phần đã chuẩn hoá nối bằng dấu cách: không chuẩn hoá lại.
+		var all, seq []string
+		for _, line := range addressLines(a) {
+			var inLine []string
+			for _, c := range components(line) {
+				n := normString(c, true)
+				if n == "" {
+					continue
+				}
+				inLine = append(inLine, n)
+				if utf8.RuneCountInString(n) < MinWordRunes {
+					continue
+				}
+				seq = append(seq, n)
+				if rc := utf8.RuneCountInString(c); rc >= MinValueRunes && (rc >= MinLineRunes || hasDigit(c)) {
+					r.comps = append(r.comps, n)
+				}
 			}
-			if r.addr == nil {
-				r.addr = map[string]bool{}
+			// Dòng dài là giá trị trọn (chuỗi con), như bản trước.
+			if len(inLine) > 0 && utf8.RuneCountInString(line) >= MinLineRunes {
+				addNorm(strings.Join(inLine, " "))
 			}
-			r.addr[n] = true
-			if utf8.RuneCountInString(c) >= MinValueRunes && (utf8.RuneCountInString(c) >= MinLineRunes || hasDigit(c)) {
-				r.comps = append(r.comps, n)
-			}
+			all = append(all, inLine...)
+		}
+		addNorm(strings.Join(all, " "))
+		if len(seq) > 0 {
+			r.addr = append(r.addr, seq)
 		}
 	}
 	for _, v := range p.Values {
@@ -209,11 +230,18 @@ func (r *Redactor) values(s string) string {
 	return b.String()
 }
 
-// spans trả các khoảng (byte của s) cần che, đã gộp.
+// spans trả các khoảng (byte của s) cần che, đã gộp. Thân có "%HH" được dò thêm một lượt KHÔNG giải %HH (rồi lấy hợp):
+// "%" đứng ngay trước một giá trị bắt đầu bằng hai ký tự hex ("50%0987654321") không được nuốt mất đầu giá trị.
 func (r *Redactor) spans(s string) [][2]int {
-	n := normalize(s, true)
+	out := r.collect(s, normalize(s, true, true), nil)
+	if hasPercentHex(s) {
+		out = r.collect(s, normalize(s, true, false), out)
+	}
+	return merge(out)
+}
+
+func (r *Redactor) collect(s string, n ntext, out [][2]int) [][2]int {
 	t := string(n.b)
-	var out [][2]int
 	add := func(i, j int) {
 		if j > i {
 			out = append(out, [2]int{int(n.pos[i]), int(n.pos[j])})
@@ -242,7 +270,9 @@ func (r *Redactor) spans(s string) [][2]int {
 		}
 	}
 	if len(r.phones) > 0 {
-		r.phoneSpans(t, add)
+		r.phoneSpans(t, func(i, j int) {
+			out = append(out, [2]int{plusBefore(s, int(n.pos[i])), int(n.pos[j])})
+		})
 	}
 	if len(r.words) > 0 {
 		r.wordSpans(s, n, t, add)
@@ -250,19 +280,30 @@ func (r *Redactor) spans(s string) [][2]int {
 	if len(r.words) > 0 || len(r.addr) > 0 {
 		r.fieldSpans(s, n, t, add)
 	}
-	return merge(out)
+	return out
+}
+
+// plusBefore: điện thoại có "+" ngay trước (thô, %2B, \u002b) thì che cả dấu "+".
+func plusBefore(s string, a int) int {
+	switch {
+	case a >= 1 && s[a-1] == '+':
+		return a - 1
+	case a >= 3 && strings.EqualFold(s[a-3:a], "%2b"):
+		return a - 3
+	case a >= 6 && strings.EqualFold(s[a-6:a], `\u002b`):
+		if a >= 7 && s[a-7] == '\\' {
+			return a - 7
+		}
+		return a - 6
+	}
+	return a
 }
 
 func merge(out [][2]int) [][2]int {
 	if len(out) < 2 {
 		return out
 	}
-	// Sắp xếp chèn: số khoảng thường rất nhỏ.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j][0] < out[j-1][0]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
 	m := out[:1]
 	for _, x := range out[1:] {
 		if l := &m[len(m)-1]; x[0] <= l[1] {
@@ -281,11 +322,13 @@ type token struct{ i, j int }
 // wordSpans: chữ mạnh đứng riêng (dạng có dấu) và chuỗi ≥ 2 chữ của tên đứng liền nhau (luật a1).
 func (r *Redactor) wordSpans(s string, n ntext, t string, add func(i, j int)) {
 	var run []token
+	underscore := false
 	flush := func() {
-		if len(run) >= 2 {
+		// "_" chỉ là dấu nối trong GIÁ TRỊ: chuỗi chữ nối bằng "_" là khoá JSON / tên tham số (order_test) thì bỏ qua.
+		if len(run) >= 2 && !(underscore && keyContext(t, run[len(run)-1].j)) {
 			add(run[0].i, run[len(run)-1].j)
 		}
-		run = run[:0]
+		run, underscore = run[:0], false
 	}
 	prevEnd := -1
 	for i := 0; i < len(t); {
@@ -302,17 +345,49 @@ func (r *Redactor) wordSpans(s string, n ntext, t string, add func(i, j int)) {
 		case !isName:
 			flush()
 		default:
-			if info.strong != "" && normString(s[n.pos[i]:n.pos[j]], false) == info.strong {
+			if info.strong != "" && mayBeAccented(s[n.pos[i]:n.pos[j]]) && normString(s[n.pos[i]:n.pos[j]], false) == info.strong {
 				add(i, j)
 			}
-			if len(run) > 0 && !joinable(t[prevEnd:i]) {
-				flush()
+			if len(run) > 0 {
+				if gap := t[prevEnd:i]; !joinable(gap) {
+					flush()
+				} else if strings.IndexByte(gap, '_') >= 0 {
+					underscore = true
+				}
 			}
 			run = append(run, token{i, j})
 		}
 		prevEnd, i = j, j
 	}
 	flush()
+}
+
+// mayBeAccented: đoạn gốc có thể chứa chữ có dấu (byte ngoài ASCII, hoặc chuỗi thoát \uXXXX / %HH).
+func mayBeAccented(o string) bool {
+	for i := 0; i < len(o); i++ {
+		if c := o[i]; c >= utf8.RuneSelf || c == '\\' || c == '%' {
+			return true
+		}
+	}
+	return false
+}
+
+// keyContext: ngay sau vị trí j (bản chuẩn hoá) là phần kết của một khoá JSON ("…" :), tên tham số form (=) hay thẻ XML (>).
+func keyContext(t string, j int) bool {
+	if j >= len(t) {
+		return false
+	}
+	switch t[j] {
+	case '=', '>':
+		return true
+	case '"':
+		k := j + 1
+		for k < len(t) && t[k] == ' ' {
+			k++
+		}
+		return k < len(t) && t[k] == ':'
+	}
+	return false
 }
 
 // joinable: khoảng giữa hai chữ chỉ gồm dấu cách, "-", ".", "_" (đã chuẩn hoá: "+", "%20", "," thành dấu cách), tối đa 3.
@@ -366,6 +441,9 @@ func (r *Redactor) fieldSpans(s string, n ntext, t string, add func(i, j int)) {
 				continue
 			}
 			ks += max(0, j-maxKey) + 1
+			if !r.wantKey(s, n, ks, j) {
+				continue
+			}
 			m := i + 1
 			for m < len(t) && t[m] == ' ' {
 				m++
@@ -380,11 +458,14 @@ func (r *Redactor) fieldSpans(s string, n ntext, t string, add func(i, j int)) {
 			r.field(s, n, t, ks, j, m+1, m+1+ve, add)
 		case '=':
 			ks := i
-			for ks > 0 && i-ks < maxKey && !strings.ContainsRune("&?; \"'<>", rune(t[ks-1])) {
+			for ks > 0 && i-ks < maxKey && !formKeyStop(t[ks-1]) {
 				ks--
 			}
+			if ks == i || !r.wantKey(s, n, ks, i) {
+				continue
+			}
 			ve := i + 1
-			for ve < len(t) && ve-i <= maxFieldValue && !strings.ContainsRune("&;\"<", rune(t[ve])) {
+			for ve < len(t) && ve-i <= maxFieldValue && !formValueStop(t[ve]) {
 				ve++
 			}
 			r.field(s, n, t, ks, i, i+1, ve, add)
@@ -397,6 +478,9 @@ func (r *Redactor) fieldSpans(s string, n ntext, t string, add func(i, j int)) {
 				continue
 			}
 			ke += i + 1
+			if !r.wantKey(s, n, i+1, ke) {
+				continue
+			}
 			vs := ke + 1
 			ve := strings.IndexByte(t[vs:min(len(t), vs+maxFieldValue)], '<')
 			if ve < 0 || vs+ve+1 >= len(t) || t[vs+ve+1] != '/' {
@@ -405,6 +489,31 @@ func (r *Redactor) fieldSpans(s string, n ntext, t string, add func(i, j int)) {
 			r.field(s, n, t, i+1, ke, vs, vs+ve, add)
 		}
 	}
+}
+
+func formKeyStop(c byte) bool {
+	switch c {
+	case '&', '?', ';', ' ', '"', '\'', '<', '>', '=':
+		return true
+	}
+	return false
+}
+
+func formValueStop(c byte) bool {
+	switch c {
+	case '&', ';', '"', '<':
+		return true
+	}
+	return false
+}
+
+// wantKey: khoá [ks,ke) gợi ý người (khi có chữ của tên) hoặc địa chỉ (khi có địa chỉ) — xét trước khi quét giá trị.
+func (r *Redactor) wantKey(s string, n ntext, ks, ke int) bool {
+	if ke <= ks {
+		return false
+	}
+	person, address := keyKind(s[n.pos[ks]:n.pos[ke]])
+	return (person && len(r.words) > 0) || (address && len(r.addr) > 0)
 }
 
 // field che giá trị [vs,ve) khi khoá [ks,ke) gợi ý người (mọi chữ của giá trị là chữ của tên) hoặc địa chỉ (giá trị
@@ -424,9 +533,29 @@ func (r *Redactor) field(s string, n ntext, t string, ks, ke, vs, ve int, add fu
 	switch {
 	case person && len(r.words) > 0 && allNameWords(v, r.words):
 		add(vs, ve)
-	case address && r.addr[v]:
+	case address && r.addressRun(v):
 		add(vs, ve)
 	}
+}
+
+// addressRun: v (đã chuẩn hoá) là một DÃY thành phần liền nhau (cách bởi một dấu cách) của một địa chỉ khách.
+func (r *Redactor) addressRun(v string) bool {
+	for _, seq := range r.addr {
+		for i := range seq {
+			rest := v
+			for j := i; j < len(seq) && strings.HasPrefix(rest, seq[j]); j++ {
+				rest = rest[len(seq[j]):]
+				if rest == "" {
+					return true
+				}
+				if rest[0] != ' ' {
+					break
+				}
+				rest = rest[1:]
+			}
+		}
+	}
+	return false
 }
 
 func allNameWords(v string, words map[string]wordInfo) bool {
@@ -440,35 +569,47 @@ func allNameWords(v string, words map[string]wordInfo) bool {
 	return found
 }
 
-// keyKind tách khoá theo "_", "-", ".", camelCase (trên khoá gốc) và so với danh sách khoá gợi ý người/địa chỉ.
+// keyKind tách khoá theo ký tự không phải chữ/số ("_", "-", ".") và camelCase (trên khoá gốc), bỏ chữ số cuối
+// (address1, name2), rồi so (không phân biệt hoa thường) với danh sách khoá gợi ý người/địa chỉ; cả khoá viết liền
+// (hoTen → hoten). Không cấp phát với khoá ASCII.
 func keyKind(key string) (person, address bool) {
-	var whole strings.Builder
-	check := func(w string) {
-		w = strings.ToLower(w)
-		person = person || personKeys[w]
-		address = address || addressKeys[w]
+	if len(key) > maxKey {
+		return false, false
 	}
-	start := 0
-	runes := []rune(key)
-	for i, c := range runes {
-		if c < utf8.RuneSelf && (unicode.IsLetter(c) || unicode.IsDigit(c)) {
-			whole.WriteRune(unicode.ToLower(c))
+	var whole, part [maxKey]byte
+	nw, np := 0, 0
+	check := func(w []byte) {
+		for len(w) > 0 && isDigit(w[len(w)-1]) {
+			w = w[:len(w)-1]
 		}
-		switch {
-		case !(unicode.IsLetter(c) || unicode.IsDigit(c)):
-			if i > start {
-				check(string(runes[start:i]))
-			}
-			start = i + 1
-		case unicode.IsUpper(c) && i > start && unicode.IsLower(runes[i-1]):
-			check(string(runes[start:i]))
-			start = i
+		if len(w) == 0 {
+			return
 		}
+		person = person || personKeys[string(w)]
+		address = address || addressKeys[string(w)]
 	}
-	if len(runes) > start {
-		check(string(runes[start:]))
+	var prev byte
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		alnum := isDigit(c) || (c|0x20 >= 'a' && c|0x20 <= 'z')
+		if !alnum {
+			check(part[:np])
+			np, prev = 0, c
+			continue
+		}
+		if c >= 'A' && c <= 'Z' && prev >= 'a' && prev <= 'z' {
+			check(part[:np])
+			np = 0
+		}
+		lc := c | 0x20
+		if isDigit(c) {
+			lc = c
+		}
+		part[np], whole[nw] = lc, lc
+		np, nw, prev = np+1, nw+1, c
 	}
-	check(whole.String())
+	check(part[:np])
+	check(whole[:nw])
 	return person, address
 }
 
@@ -563,15 +704,24 @@ func phoneDigits(v string) (string, bool) {
 
 // ---- Địa chỉ ----
 
-// components tách địa chỉ theo dòng, rồi mỗi dòng theo "," và " - ".
-func components(a string) []string {
+// addressLines tách địa chỉ theo dòng (đã cắt khoảng trắng, bỏ dòng rỗng).
+func addressLines(a string) []string {
 	var out []string
-	for _, line := range strings.FieldsFunc(a, func(c rune) bool { return c == '\n' || c == '\r' }) {
-		for _, part := range strings.Split(line, ",") {
-			for _, c := range strings.Split(part, " - ") {
-				if c = strings.TrimSpace(c); c != "" {
-					out = append(out, c)
-				}
+	for _, l := range strings.FieldsFunc(a, func(c rune) bool { return c == '\n' || c == '\r' }) {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// components tách một dòng địa chỉ theo "," và " - ".
+func components(line string) []string {
+	var out []string
+	for _, part := range strings.Split(line, ",") {
+		for _, c := range strings.Split(part, " - ") {
+			if c = strings.TrimSpace(c); c != "" {
+				out = append(out, c)
 			}
 		}
 	}
