@@ -1,5 +1,9 @@
 // Package connectorsdk là bộ khởi chạy tiến trình connector: nhận một connector.Connector,
 // phục vụ nó qua gRPC với mTLS bắt buộc, health, log không chứa thân và tắt êm.
+//
+// Keepalive (hợp đồng với core, không cấu hình được): server chấp nhận client ping cách nhau từ 10 giây,
+// kể cả khi không có lời gọi nào đang chạy (core ping mỗi 15 giây, chờ trả lời 5 giây); server tự ping sau
+// 30 giây rảnh và đóng kết nối không trả lời trong 10 giây.
 package connectorsdk
 
 import (
@@ -18,6 +22,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
@@ -42,6 +47,24 @@ type Options struct {
 	MaxConcurrentStreams uint32        // mặc định 1000
 	ShutdownGrace        time.Duration // thời gian chờ lời gọi đang chạy khi tắt; mặc định 20s
 	Logger               *slog.Logger  // mặc định slog.Default()
+
+	keepalive *keepaliveConfig // nil: defaultKeepalive(); chỉ test đặt để rút ngắn thời gian
+}
+
+// keepaliveConfig là keepalive phía server. Core ping mỗi 15 giây khi rảnh (kể cả không có lời gọi nào)
+// để phát hiện kết nối chết sau NAT hay cân bằng tải; mặc định của gRPC đóng client ping dày hơn 5 phút
+// bằng GOAWAY too_many_pings. Cho phép ping cách nhau từ 10 giây, kể cả khi không có luồng; server tự
+// ping sau 30 giây rảnh và đóng kết nối không trả lời trong 10 giây.
+type keepaliveConfig struct {
+	enforce keepalive.EnforcementPolicy
+	params  keepalive.ServerParameters
+}
+
+func defaultKeepalive() keepaliveConfig {
+	return keepaliveConfig{
+		enforce: keepalive.EnforcementPolicy{MinTime: 10 * time.Second, PermitWithoutStream: true},
+		params:  keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second},
+	}
 }
 
 // Serve phục vụ c cho tới khi ctx huỷ, rồi tắt êm trong ShutdownGrace và ép dừng nếu quá hạn.
@@ -105,8 +128,14 @@ func ServeListener(ctx context.Context, c connector.Connector, o Options, lis ne
 	for _, n := range o.AllowedClients {
 		allowed[strings.ToLower(n)] = true
 	}
+	ka := defaultKeepalive()
+	if o.keepalive != nil {
+		ka = *o.keepalive
+	}
 	opts := []grpc.ServerOption{
 		grpc.MaxConcurrentStreams(streams),
+		grpc.KeepaliveEnforcementPolicy(ka.enforce),
+		grpc.KeepaliveParams(ka.params),
 		// Thứ tự: log ngoài cùng để thấy cả lời gọi bị từ chối và panic đã thành Internal. Kiểm tên chạy sau
 		// chứng chỉ và trước handler: core gọi nhầm tiến trình thì lời gọi bị từ chối khi chưa chạm connector.
 		grpc.ChainUnaryInterceptor(logInterceptor(log), authInterceptor(log, o.TLS != nil, allowed),
