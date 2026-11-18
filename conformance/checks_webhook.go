@@ -29,11 +29,15 @@ func cloneRaw(r connector.RawWebhook) connector.RawWebhook {
 	return out
 }
 
-func (e *env) parse(raw connector.RawWebhook) (ev connector.ProviderEvent, ok bool, err error) {
+func (e *env) parse(raw connector.RawWebhook) (connector.ProviderEvent, bool, error) {
 	ctx, cancel := normalCtx()
 	defer cancel()
-	ok = e.call("ParseWebhook", callLimit+time.Second, func() { ev, err = e.receiver().ParseWebhook(ctx, cloneRaw(raw)) })
-	return ev, ok, err
+	var ev connector.ProviderEvent
+	var err error
+	if !e.call("ParseWebhook", callLimit+time.Second, func() { ev, err = e.receiver().ParseWebhook(ctx, cloneRaw(raw)) }) {
+		return connector.ProviderEvent{}, false, nil
+	}
+	return ev, true, err
 }
 
 func (e *env) signed(tx string) connector.RawWebhook {

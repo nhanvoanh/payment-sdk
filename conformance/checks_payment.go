@@ -21,10 +21,15 @@ func (e *env) createReq(tx string) connector.CreatePaymentRequest {
 	}
 }
 
-// create gọi CreatePayment với ctx cho trước; ok sai khi panic hay quá limit (đã thành finding).
-func (e *env) create(ctx context.Context, limit time.Duration, req connector.CreatePaymentRequest) (res connector.CreatePaymentResult, ok bool, err error) {
-	ok = e.call("CreatePayment", limit, func() { res, err = e.c.CreatePayment(ctx, req) })
-	return res, ok, err
+// create gọi CreatePayment với ctx cho trước; ok sai khi panic hay quá limit (đã thành finding). ok sai thì
+// không đọc kết quả: goroutine bị bỏ mặc vẫn có thể đang ghi (xem env.call).
+func (e *env) create(ctx context.Context, limit time.Duration, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, bool, error) {
+	var res connector.CreatePaymentResult
+	var err error
+	if !e.call("CreatePayment", limit, func() { res, err = e.c.CreatePayment(ctx, req) }) {
+		return connector.CreatePaymentResult{}, false, nil
+	}
+	return res, true, err
 }
 
 // createNormal là bước chuẩn bị: tạo một giao dịch ở ModeNormal, trả ProviderRef. Không tạo được thì
@@ -36,9 +41,12 @@ func (e *env) createNormal(tx string) (string, bool) {
 	var res connector.CreatePaymentResult
 	var err error
 	if g := guard(callLimit+time.Second, func() { res, err = e.c.CreatePayment(ctx, e.createReq(tx)) }); g != nil || err != nil {
-		reason := errText(err)
+		// g khác nil thì goroutine có thể còn đang ghi err: không đọc nó.
+		var reason string
 		if g != nil {
 			reason = g.Error()
+		} else {
+			reason = errText(err)
 		}
 		e.skipf("bước chuẩn bị CreatePayment ở ModeNormal hỏng (%s), xem PAY-1", reason)
 		return "", false
@@ -148,8 +156,10 @@ func (e *env) modeCall(m Mode, what string, fn func(ctx context.Context) error) 
 	ctx, cancel := context.WithTimeout(context.Background(), ctxLimit)
 	defer cancel()
 	var err error
-	ok := e.call(what, limit, func() { err = fn(ctx) })
-	return ok, err
+	if !e.call(what, limit, func() { err = fn(ctx) }) {
+		return false, nil // goroutine bị bỏ mặc có thể còn đang ghi err
+	}
+	return true, err
 }
 
 // expectUnavailable: đối tác từ chối kết nối thì core phải hiểu là "chắc chắn chưa xử lý".
@@ -235,11 +245,15 @@ func checkPAY7(e *env) {
 
 func (e *env) querier() connector.PaymentQuerier { q, _ := e.c.(connector.PaymentQuerier); return q }
 
-func (e *env) query(req connector.QueryPaymentRequest) (st connector.PaymentStatus, ok bool, err error) {
+func (e *env) query(req connector.QueryPaymentRequest) (connector.PaymentStatus, bool, error) {
 	ctx, cancel := normalCtx()
 	defer cancel()
-	ok = e.call("QueryPayment", callLimit+time.Second, func() { st, err = e.querier().QueryPayment(ctx, req) })
-	return st, ok, err
+	var st connector.PaymentStatus
+	var err error
+	if !e.call("QueryPayment", callLimit+time.Second, func() { st, err = e.querier().QueryPayment(ctx, req) }) {
+		return connector.PaymentStatus{}, false, nil
+	}
+	return st, true, err
 }
 
 // checkQRY1: core truy vấn cả giao dịch chưa từng tới được đối tác; "không thấy" phải là Found false.

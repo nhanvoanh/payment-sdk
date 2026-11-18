@@ -1667,3 +1667,42 @@ func TestCheck_ID5_DatelessConnectorPasses(t *testing.T) {
 		t.Fatalf("connector không dùng ngày không được có finding:%s", dump(r))
 	}
 }
+
+// Connector bỏ qua ctx rồi trả lời TRỄ hơn hạn của luật (không treo mãi): goroutine của guard vẫn ghi kết quả sau
+// khi luật đã bỏ đi. Bộ luật không được đọc kết quả đó (race thật, -race bắt) mà chỉ báo "không trả về".
+func TestCheck_LateAnswerPastLimitIsNotRead(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good, goodQuery := f.OnCreate, f.OnQuery
+		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			if p.currentMode() == conformance.ModeHang {
+				time.Sleep(2600 * time.Millisecond) // quá 300 ms + 2 s của luật treo, rồi mới trả lời
+				return connector.CreatePaymentResult{Status: connector.StatusFailed}, connector.ErrProviderUnavailable
+			}
+			return good(ctx, req)
+		}
+		f.OnQuery = func(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
+			if strings.Contains(req.TransactionCode, "QRY1") {
+				time.Sleep(6300 * time.Millisecond) // quá hạn 5 s + 1 s của lời gọi thường
+				return connector.PaymentStatus{Found: true}, errors.New("trễ")
+			}
+			return goodQuery(ctx, req)
+		}
+		return f
+	}))
+	got := rules(r)
+	for _, want := range []string{"PAY-4", "QRY-1"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("Check không bắt được %s:%s", want, dump(r))
+		}
+	}
+	for _, f := range r.Findings {
+		// Lượt /grpc: proxy tự hết hạn và trả lỗi DeadlineExceeded, đó là câu trả lời thật của proxy, không phải kết quả trễ.
+		if strings.HasSuffix(f.Rule, "/grpc") {
+			continue
+		}
+		if !strings.Contains(f.Detail, "không trả về") && !strings.Contains(f.Detail, "ctx đã huỷ") {
+			t.Errorf("%s đọc kết quả trả trễ thay vì báo không trả về: %s", f.Rule, f.Detail)
+		}
+	}
+}

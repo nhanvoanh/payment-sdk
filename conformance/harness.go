@@ -169,7 +169,8 @@ func (e *env) skipf(format string, args ...any) {
 	e.mu.Unlock()
 }
 
-// call chạy một lời gọi connector; panic hay quá limit thành finding và trả false.
+// call chạy một lời gọi connector; panic hay quá limit thành finding và trả false. Trả false thì người gọi KHÔNG
+// được đọc biến fn ghi: hết hạn thì goroutine bị bỏ mặc vẫn có thể ghi chúng bất cứ lúc nào (race).
 func (e *env) call(what string, limit time.Duration, fn func()) bool {
 	g := guard(limit, fn)
 	switch {
