@@ -20,7 +20,7 @@ vi phạm trùng.
 
 ### Core hiểu lỗi thế nào
 
-Các luật xét lỗi theo đúng thứ tự core phân loại: `ErrUnknownOutcome` trước, rồi `ErrProviderRejected`,
+Các luật xét lỗi bằng `connector.Classify`, chính hàm core dùng (một nguồn duy nhất): `ErrUnknownOutcome` trước, rồi `ErrProviderRejected`,
 rồi `ErrProviderUnavailable` **và `ErrNotSupported`** (core coi cả hai là "chắc chắn chưa xử lý" và chốt
 thất bại), mọi lỗi khác là chưa rõ. Vì vậy:
 
@@ -100,23 +100,36 @@ Lưu ý khi viết Harness:
 
 ## Dùng trong test của connector
 
+Ví dụ chạy được với connector mẫu `acme` của `template/` (đổi đường dẫn import theo module của bạn):
+
 ```go
 package acme_test
+
+import (
+	"testing"
+
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/conformance"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme/acmetest"
+)
 
 func TestConformance(t *testing.T) {
 	conformance.Run(t, conformance.Harness{
 		New: func(tb testing.TB) (connector.Connector, conformance.Partner) {
-			partner := acmetest.NewPartner(tb) // httptest.Server đóng vai đối tác, tự dọn khi test xong
+			partner := acmetest.NewPartner(tb) // máy chủ HTTP thật trên 127.0.0.1 đóng vai đối tác, tự dọn khi test xong
 			c, err := acme.New(acme.Config{
-				BaseURL:   partner.URL(),
-				SecretKey: partner.Secret(),
+				BaseURL:    partner.URL(),
+				MerchantID: partner.MerchantID(),
+				SecretKey:  partner.Secret(),
 			})
 			if err != nil {
 				tb.Fatal(err)
 			}
 			return c, partner
 		},
-		Method:             paykit.MethodQR,
+		Method:             paykit.MethodWallet, // phương thức acme khai trong Methods()
 		Amount:             paykit.Money{Amount: 150000, Currency: "VND"},
 		CreateCallsPartner: true,
 	})

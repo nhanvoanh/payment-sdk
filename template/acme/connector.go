@@ -263,8 +263,8 @@ func (c *Connector) fetchToken(ctx context.Context) (string, time.Time, error) {
 }
 
 // tokenError: lấy token là lời gọi riêng và chưa mang thông tin về tiền; lỗi ở đây (kể cả timeout, 5xx,
-// thân hỏng) nghĩa là request nghiệp vụ CHƯA từng được gửi, tức chắc chắn acme chưa xử lý gì: đó đúng là
-// ErrProviderUnavailable. Nguyên nhân chỉ được ghi bằng %v, không %w: nếu bọc cả ErrUnknownOutcome của
+// thân hỏng) nghĩa là request nghiệp vụ CHƯA từng được gửi, hoặc (lượt lấy token sau một lần 401) đã gửi
+// nhưng acme từ chối trước khi xử lý: chắc chắn acme chưa xử lý gì, đúng là ErrProviderUnavailable. Nguyên nhân chỉ được ghi bằng %v, không %w: nếu bọc cả ErrUnknownOutcome của
 // providerhttp thì lỗi khớp hai sentinel và core (xét Unknown trước) chốt sai chiều.
 func tokenError(cause error) error {
 	return fmt.Errorf("%w: không lấy được token: %v", connector.ErrProviderUnavailable, cause)

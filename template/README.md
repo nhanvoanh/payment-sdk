@@ -66,13 +66,13 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 
 | Tình huống | Trả | Vì sao |
 |---|---|---|
-| Lấy token lỗi (kể cả timeout, 5xx, thân hỏng) | `ErrProviderUnavailable` | Lấy token là lời gọi riêng, chưa mang thông tin về tiền: request nghiệp vụ chưa từng được gửi. Nguyên nhân ghi bằng `%v`, không `%w`, để lỗi không khớp thêm `ErrUnknownOutcome`. |
+| Lấy token lỗi (kể cả timeout, 5xx, thân hỏng) | `ErrProviderUnavailable` | Lấy token là lời gọi riêng, chưa mang thông tin về tiền. Ở lần lấy đầu, request nghiệp vụ chưa từng được gửi; ở lượt lấy token SAU một lần 401, request nghiệp vụ đã gửi nhưng đã bị acme từ chối trước khi xử lý (401). Cả hai trường hợp acme chưa xử lý gì. Nguyên nhân ghi bằng `%v`, không `%w`, để lỗi không khớp thêm `ErrUnknownOutcome`. |
 | Không kết nối được tới acme (chưa gửi byte nào) | `ErrProviderUnavailable` | `providerhttp` phân loại; connector trả nguyên, chỉ thêm ngữ cảnh bằng `%w`. |
 | Hết hạn hoặc đứt sau khi đã gửi | `ErrUnknownOutcome` | `providerhttp` phân loại. Acme có thể đã trừ tiền. |
 | 401 lần đầu | làm mới token, gửi lại **một** lần | 401 là từ chối trước khi xử lý nên gửi lại không thể trừ tiền hai lần. Gửi cùng `Idempotency-Key`. |
 | 401 lần hai | `ErrProviderUnavailable` | Chỉ đúng khi tài liệu của đối tác bảo đảm 401 là từ chối trước khi xử lý; không được giả định. Không có bảo đảm đó thì dùng `ErrUnknownOutcome`. |
 | 4xx có mã thuộc tập từ chối của thao tác (bảng dưới) | `*connector.RejectedError{Code, Message}` | Tài liệu acme nói rõ đó là từ chối cuối cùng của thao tác này. Mã ngoài tập là chưa rõ: `ErrUnknownOutcome`. |
-| 404 `not_found` khi truy vấn thanh toán hoặc hoàn tiền | `Found=false`, không lỗi | Core truy vấn cả giao dịch chưa tới được acme; lỗi ở đây khiến giao dịch không bao giờ đóng được. |
+| `not_found` khi truy vấn thanh toán hoặc hoàn tiền (theo mã lỗi của acme, bất kể mã HTTP) | `Found=false`, không lỗi | Core truy vấn cả giao dịch chưa tới được acme; lỗi ở đây khiến giao dịch không bao giờ đóng được. |
 | 5xx, 3xx, 4xx mã chưa ánh xạ hoặc không có mã | `ErrUnknownOutcome` | Acme (hoặc proxy giữa đường) đã trả lời nên có thể đã xử lý. Không bao giờ unavailable. |
 | 2xx với thân không hiểu được, thiếu trường, trạng thái lạ | `ErrUnknownOutcome` | Tiền có thể đã đi; không đoán "thất bại". |
 | Thiếu `ProviderRef` khi huỷ (ta phát hiện trước khi gửi) | `*connector.RejectedError{Code: "cannot_cancel"}`, không gọi mạng | Acme chỉ huỷ theo `ProviderRef`, không theo `TransactionCode`: giao dịch chưa có `ProviderRef` (Create chưa nghe được trả lời) thì biết chắc không huỷ được bằng thông tin được cho. Câu trả lời phải dứt khoát: với Rejected, core truy vấn lại rồi mới quyết (acme không biết giao dịch thì cho hết hạn; acme báo đã thu thì ghi đã trả). `ErrProviderUnavailable` ở đây làm core hiểu là "không rõ" và không bao giờ cho giao dịch hết hạn (luật `CXL-3`). |
