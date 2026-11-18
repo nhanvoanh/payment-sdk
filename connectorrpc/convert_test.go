@@ -224,6 +224,7 @@ func TestRawWebhook_RoundTrip(t *testing.T) {
 			"rỗng":    {},
 		},
 		Query:    map[string][]string{"q": {"1", "2", "3"}, "\xff": {"\xff\xff"}},
+		RawQuery: "q=1&q=2&q=3&sig=a+b%2Bc&x=%zz;y=1&\xff=\xff\xff",
 		Body:     []byte{0, 1, 2, 0xff},
 		RemoteIP: "10.0.0.1",
 	}

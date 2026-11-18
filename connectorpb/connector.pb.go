@@ -580,11 +580,13 @@ func (x *ByteEntry) GetValues() [][]byte {
 }
 
 type RawWebhook struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Headers       []*ByteEntry           `protobuf:"bytes,1,rep,name=headers,proto3" json:"headers,omitempty"`
-	Query         []*ByteEntry           `protobuf:"bytes,2,rep,name=query,proto3" json:"query,omitempty"`
-	Body          []byte                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`
-	RemoteIp      string                 `protobuf:"bytes,4,opt,name=remote_ip,json=remoteIp,proto3" json:"remote_ip,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Headers  []*ByteEntry           `protobuf:"bytes,1,rep,name=headers,proto3" json:"headers,omitempty"`
+	Query    []*ByteEntry           `protobuf:"bytes,2,rep,name=query,proto3" json:"query,omitempty"`
+	Body     []byte                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`
+	RemoteIp string                 `protobuf:"bytes,4,opt,name=remote_ip,json=remoteIp,proto3" json:"remote_ip,omitempty"`
+	// Query string nguyên văn trên đường dây (không có dấu ?); bytes vì có thể không phải UTF-8.
+	RawQuery      []byte `protobuf:"bytes,5,opt,name=raw_query,json=rawQuery,proto3" json:"raw_query,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -645,6 +647,13 @@ func (x *RawWebhook) GetRemoteIp() string {
 		return x.RemoteIp
 	}
 	return ""
+}
+
+func (x *RawWebhook) GetRawQuery() []byte {
+	if x != nil {
+		return x.RawQuery
+	}
+	return nil
 }
 
 // WebhookAck là phản hồi HTTP gửi lại đối tác ứng với một outcome.
@@ -2196,13 +2205,14 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"durationMs\"7\n" +
 	"\tByteEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\fR\x04name\x12\x16\n" +
-	"\x06values\x18\x02 \x03(\fR\x06values\"\xbd\x01\n" +
+	"\x06values\x18\x02 \x03(\fR\x06values\"\xda\x01\n" +
 	"\n" +
 	"RawWebhook\x12@\n" +
 	"\aheaders\x18\x01 \x03(\v2&.hasaki.payment.connector.v1.ByteEntryR\aheaders\x12<\n" +
 	"\x05query\x18\x02 \x03(\v2&.hasaki.payment.connector.v1.ByteEntryR\x05query\x12\x12\n" +
 	"\x04body\x18\x03 \x01(\fR\x04body\x12\x1b\n" +
-	"\tremote_ip\x18\x04 \x01(\tR\bremoteIp\"[\n" +
+	"\tremote_ip\x18\x04 \x01(\tR\bremoteIp\x12\x1b\n" +
+	"\traw_query\x18\x05 \x01(\fR\brawQuery\"[\n" +
 	"\n" +
 	"WebhookAck\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\x05R\x06status\x12\x12\n" +

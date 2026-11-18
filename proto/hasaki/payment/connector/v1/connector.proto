@@ -94,6 +94,8 @@ message RawWebhook {
   repeated ByteEntry query = 2;
   bytes body = 3;
   string remote_ip = 4;
+  // Query string nguyên văn trên đường dây (không có dấu ?); bytes vì có thể không phải UTF-8.
+  bytes raw_query = 5;
 }
 
 // WebhookAck là phản hồi HTTP gửi lại đối tác ứng với một outcome.

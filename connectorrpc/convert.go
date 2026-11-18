@@ -239,9 +239,16 @@ func entriesFromProto(es []*connectorpb.ByteEntry) map[string][]string {
 	return out
 }
 
+func rawQueryToProto(q string) []byte {
+	if q == "" {
+		return nil
+	}
+	return []byte(q)
+}
+
 func RawWebhookToProto(r connector.RawWebhook) *connectorpb.RawWebhook {
 	return &connectorpb.RawWebhook{
-		Headers: entriesToProto(r.Headers), Query: entriesToProto(r.Query), Body: r.Body, RemoteIp: valid(r.RemoteIP),
+		Headers: entriesToProto(r.Headers), Query: entriesToProto(r.Query), RawQuery: rawQueryToProto(r.RawQuery), Body: r.Body, RemoteIp: valid(r.RemoteIP),
 	}
 }
 
@@ -249,7 +256,7 @@ func RawWebhookFromProto(r *connectorpb.RawWebhook) connector.RawWebhook {
 	if r == nil {
 		return connector.RawWebhook{}
 	}
-	out := connector.RawWebhook{Headers: entriesFromProto(r.Headers), Query: entriesFromProto(r.Query), RemoteIP: r.RemoteIp}
+	out := connector.RawWebhook{Headers: entriesFromProto(r.Headers), Query: entriesFromProto(r.Query), RawQuery: string(r.RawQuery), RemoteIP: r.RemoteIp}
 	if len(r.Body) > 0 {
 		out.Body = r.Body
 	}

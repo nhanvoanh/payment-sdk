@@ -75,8 +75,12 @@ type RawExchange struct {
 
 // RawWebhook là request đến nguyên bản, chưa kiểm chữ ký.
 type RawWebhook struct {
-	Headers  map[string][]string
-	Query    map[string][]string
+	Headers map[string][]string
+	// Query là bản đã phân tích để tiện đọc; có thể thiếu cặp không hợp lệ (như "x=%zz" hay cặp ngăn bằng ";")
+	// và đã giải mã (+ thành dấu cách). Khi chữ ký tính trên query thô, dùng RawQuery.
+	Query map[string][]string
+	// RawQuery là query nguyên văn như trên đường dây, không có dấu "?".
+	RawQuery string
 	Body     []byte
 	RemoteIP string
 }
