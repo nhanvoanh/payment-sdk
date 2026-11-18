@@ -13,6 +13,12 @@ const (
 	OpQueryRefund  Operation = "query_refund"
 )
 
+// AllOperations trả mọi Operation theo thứ tự cố định (thứ tự Describe khai). Mỗi lần gọi là một bản sao,
+// người gọi sửa thoải mái. Thêm hằng Operation thì thêm vào đây (có test).
+func AllOperations() []Operation {
+	return []Operation{OpQueryPayment, OpWebhook, OpRedirect, OpCharge, OpCancel, OpRefund, OpQueryRefund}
+}
+
 // CapabilityReporter cho phép connector thu hẹp năng lực so với các interface nó cài.
 type CapabilityReporter interface{ Supports(op Operation) bool }
 

@@ -433,6 +433,21 @@ func TestAcme_CancelWithoutProviderRefIsRejectedWithoutCall(t *testing.T) {
 	}
 }
 
+// Hoàn tiền: not_found (giao dịch gốc không có ở acme) và declined là từ chối cuối cùng, chưa hoàn gì.
+func TestAcme_RefundRejectCodes(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   string
+	}{{404, "not_found"}, {422, "declined"}} {
+		_, err := errorStub(t, tc.status, tc.code).CreateRefund(context.Background(),
+			connector.RefundRequest{RefundCode: "R", ProviderRef: "p", Money: amount})
+		var rej *connector.RejectedError
+		if !errors.As(err, &rej) || rej.Code != tc.code || errors.Is(err, connector.ErrUnknownOutcome) {
+			t.Errorf("%s: err = %v, cần RejectedError{Code: %s}", tc.code, err, tc.code)
+		}
+	}
+}
+
 func TestAcme_QueryNotFoundByCodeAnyHTTPStatus(t *testing.T) {
 	ctx := context.Background()
 	st, err := errorStub(t, 400, "not_found").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X"})
@@ -456,6 +471,17 @@ func TestAcme_MismatchedOrderCodeIsUnknown(t *testing.T) {
 	_, err := c.CreatePayment(context.Background(), createReq("TMISMATCH"))
 	if !errors.Is(err, connector.ErrUnknownOutcome) {
 		t.Fatalf("err = %v, cần ErrUnknownOutcome", err)
+	}
+}
+
+func TestAcme_MalformedSignatureIsInvalid(t *testing.T) {
+	c, p := newPair(t)
+	raw := p.SignedWebhook("TSIG", "ref", connector.StatusSucceeded, amount)
+	for _, sig := range []string{"", "không-phải-hex", "00"} {
+		raw.Headers = map[string][]string{"X-Acme-Signature": {sig}}
+		if _, err := c.ParseWebhook(context.Background(), raw); !errors.Is(err, connector.ErrInvalidSignature) {
+			t.Errorf("chữ ký %q: err = %v, cần ErrInvalidSignature", sig, err)
+		}
 	}
 }
 

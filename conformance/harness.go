@@ -237,18 +237,13 @@ func loopback(tb testing.TB, c connector.Connector) (*connectorrpc.Client, *serv
 // declared trả các thao tác connector khai (connector.As… đúng); Supports panic thì coi là không khai.
 func declared(c connector.Connector) map[connector.Operation]bool {
 	ops := map[connector.Operation]bool{}
-	for _, op := range allOps {
+	for _, op := range connector.AllOperations() {
 		var ok bool
 		if guard(callLimit, func() { ok = asOp(c, op) }) == nil && ok {
 			ops[op] = true
 		}
 	}
 	return ops
-}
-
-var allOps = []connector.Operation{
-	connector.OpQueryPayment, connector.OpWebhook, connector.OpRedirect, connector.OpCharge,
-	connector.OpCancel, connector.OpRefund, connector.OpQueryRefund,
 }
 
 func asOp(c connector.Connector, op connector.Operation) bool {

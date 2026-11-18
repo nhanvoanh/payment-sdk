@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -565,5 +566,66 @@ func TestDescribe_TransportErrorKeepsDescription(t *testing.T) {
 	}
 	if !c.Described() || !c.Supports(connector.OpRefund) || len(c.Methods()) == 0 {
 		t.Fatal("lỗi vận chuyển phải giữ mô tả cũ")
+	}
+}
+
+// Cách ly xảy ra trong lúc Describe đang bay (một lời gọi nghiệp vụ bị server từ chối vì sai tên): Describe
+// trả lời đúng tên nhưng không được gỡ cách ly, vì nó có thể tới từ tiến trình khác với tiến trình vừa từ chối.
+func TestQuarantine_SetWhileDescribeInFlightIsKept(t *testing.T) {
+	srv := grpctest.New(t, connectorrpc.NewServer(newFake()))
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if _, err := c.Describe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	connectorrpc.SetAfterReady(c, func() { connectorrpc.Quarantine(c) }) // cách ly khi Describe đã sắp gửi
+	if _, err := c.Describe(context.Background()); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
+	}
+	if !c.Quarantined() {
+		t.Fatal("thế hệ đổi trong lúc Describe bay: phải giữ cách ly")
+	}
+	connectorrpc.SetAfterReady(c, nil)
+	if _, err := c.Describe(context.Background()); err != nil || c.Quarantined() {
+		t.Fatalf("Describe sau đó không có đua thì gỡ cách ly: %v", err)
+	}
+}
+
+// Proxy tự cách ly vì một lời gọi nghiệp vụ bị server từ chối danh tính thì báo qua OnQuarantine; Describe
+// sai tên không đi qua hook (lỗi đã trả cho người gọi Describe).
+func TestQuarantine_OnQuarantineHook(t *testing.T) {
+	srv := grpctest.New(t, connectorrpc.NewServer(connectortest.New("other", paykit.MethodQR)),
+		grpc.UnaryInterceptor(connectorrpc.IdentityInterceptor("other")))
+	var mu sync.Mutex
+	var reasons []string
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{OnQuarantine: func(r string) {
+		mu.Lock()
+		reasons = append(reasons, r)
+		mu.Unlock()
+	}})
+	if _, err := c.Describe(context.Background()); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
+	}
+	mu.Lock()
+	n := len(reasons)
+	mu.Unlock()
+	if n != 0 {
+		t.Fatalf("Describe không gọi hook: %v", reasons)
+	}
+	if err := create(context.Background(), connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})); err == nil {
+		t.Fatal("phải bị từ chối")
+	}
+	_ = create(context.Background(), c) // đang cách ly: chặn trước khi gửi, không gọi hook
+	c2 := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{OnQuarantine: func(r string) {
+		mu.Lock()
+		reasons = append(reasons, r)
+		mu.Unlock()
+	}})
+	if err := create(context.Background(), c2); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reasons) != 1 || !strings.Contains(reasons[0], "CreatePayment") {
+		t.Fatalf("hook phải được gọi đúng một lần, nêu RPC: %v", reasons)
 	}
 }

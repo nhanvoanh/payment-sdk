@@ -47,7 +47,7 @@ func checkID2(e *env) {
 
 // checkID3: core tin Supports; khai mà không cài thì thao tác tiền (huỷ, hoàn) hỏng lúc chạy.
 func checkID3(e *env) {
-	for _, op := range allOps {
+	for _, op := range connector.AllOperations() {
 		var s bool
 		if !e.call("Supports("+string(op)+")", callLimit, func() { s = connector.Supports(e.c, op) }) {
 			return

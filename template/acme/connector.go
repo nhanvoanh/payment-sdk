@@ -9,9 +9,6 @@ package acme
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +20,7 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/signing"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/tokencache"
 )
 
@@ -221,13 +219,8 @@ func (c *Connector) validSignature(raw connector.RawWebhook) bool {
 	if len(sigs) != 1 {
 		return false
 	}
-	got, err := hex.DecodeString(sigs[0])
-	if err != nil || len(got) == 0 {
-		return false
-	}
-	mac := hmac.New(sha256.New, []byte(c.cfg.SecretKey))
-	mac.Write(raw.Body)
-	return hmac.Equal(mac.Sum(nil), got) // so sánh thời gian không đổi
+	// signing.EqualHex: hex hỏng hay rỗng là sai; so sánh thời gian không đổi.
+	return signing.EqualHex(signing.HMACSHA256([]byte(c.cfg.SecretKey), raw.Body), sigs[0])
 }
 
 // AckWebhook là hàm thuần: core hỏi một lần lúc nạp connector. Acme coi 2xx là "đã nhận, đừng gửi lại";

@@ -7,12 +7,6 @@ import (
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
 )
 
-// allOperations là các thao tác tuỳ chọn Describe có thể khai, theo thứ tự cố định.
-var allOperations = []connector.Operation{
-	connector.OpQueryPayment, connector.OpWebhook, connector.OpRedirect, connector.OpCharge,
-	connector.OpCancel, connector.OpRefund, connector.OpQueryRefund,
-}
-
 type server struct {
 	connectorpb.UnimplementedConnectorServiceServer
 	c connector.Connector
@@ -32,7 +26,7 @@ func (s *server) Describe(context.Context, *connectorpb.DescribeRequest) (*conne
 	for _, m := range s.c.Methods() {
 		resp.Methods = append(resp.Methods, valid(string(m)))
 	}
-	for _, op := range allOperations {
+	for _, op := range connector.AllOperations() {
 		if connector.Supports(s.c, op) {
 			resp.Operations = append(resp.Operations, string(op))
 		}

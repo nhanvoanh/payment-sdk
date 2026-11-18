@@ -32,6 +32,10 @@ type ClientOptions struct {
 	CallTimeout time.Duration
 	// ReadyWait là thời gian tối đa chờ kết nối READY trước khi gửi. Mặc định 1s.
 	ReadyWait time.Duration
+	// OnQuarantine (tuỳ chọn) được gọi khi proxy tự cách ly vì một lời gọi nghiệp vụ bị server từ chối danh
+	// tính; reason nêu RPC và lỗi. Describe sai danh tính không gọi hook (lỗi đã trả cho người gọi Describe).
+	// Gọi đồng bộ trên goroutine của lời gọi: không được chặn.
+	OnQuarantine func(reason string)
 }
 
 // ErrIdentityMismatch: tiến trình ở địa chỉ này không phải connector đã cấu hình — Describe trả tên hoặc phiên
@@ -171,6 +175,9 @@ func (c *Client) invoke(ctx context.Context, method string, notSent error, send 
 	if err := send(ctx, grpc.Trailer(&trailer)); err != nil {
 		if identityRejected(err, trailer) {
 			c.quarantine()
+			if business && c.opts.OnQuarantine != nil {
+				c.opts.OnQuarantine(fmt.Sprintf("%s bị server từ chối vì sai tên connector: %v", method, err))
+			}
 			return fmt.Errorf("%w: %s: %w: server từ chối trước khi xử lý: %v", notSent, method, ErrIdentityMismatch, err)
 		}
 		return fmt.Errorf("%w: %s: %v", connector.ErrUnknownOutcome, method, err)
@@ -200,9 +207,12 @@ func identityRejected(err error, trailer metadata.MD) bool {
 }
 
 // Describe gọi RPC, kiểm phiên bản và tên rồi lưu nguyên tử. Lỗi thì không lưu gì; sai danh tính thì cách ly.
+// Cách ly xảy ra trong lúc Describe đang bay (thế hệ đổi) thì không lưu và không gỡ cách ly: câu trả lời
+// đúng tên có thể tới từ tiến trình khác với tiến trình vừa từ chối một lời gọi nghiệp vụ.
 func (c *Client) Describe(ctx context.Context) (Description, error) {
 	c.describeMu.Lock()
 	defer c.describeMu.Unlock()
+	gen := c.gen.Load()
 	var resp *connectorpb.DescribeResponse
 	err := c.invoke(ctx, describeRPC, connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
 		resp, e = c.rpc.Describe(ctx, &connectorpb.DescribeRequest{}, opts...)
@@ -223,7 +233,7 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 	for _, m := range resp.GetMethods() {
 		d.Methods = append(d.Methods, paykit.Method(m))
 	}
-	for _, op := range allOperations {
+	for _, op := range connector.AllOperations() {
 		for _, s := range resp.GetOperations() {
 			if s == string(op) {
 				d.Operations[op] = true
@@ -243,8 +253,16 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 			d.acks[o] = ackResp{status: int(a.GetStatus()), body: a.GetBody(), ct: a.GetContentType()}
 		}
 	}
+	if c.gen.Load() != gen {
+		return Description{}, fmt.Errorf("%w: connector bị cách ly trong lúc Describe đang bay; giữ cách ly tới lần Describe sau", ErrIdentityMismatch)
+	}
 	c.desc.Store(d)
 	c.quarantined.Store(false)
+	// quarantine tăng thế hệ TRƯỚC khi đặt cờ: thế hệ đổi giữa lần kiểm trên và lần xoá cờ thì đặt lại cờ.
+	if c.gen.Load() != gen {
+		c.quarantined.Store(true)
+		return Description{}, fmt.Errorf("%w: connector bị cách ly trong lúc Describe đang bay; giữ cách ly tới lần Describe sau", ErrIdentityMismatch)
+	}
 	return d.copyOut(), nil
 }
 
