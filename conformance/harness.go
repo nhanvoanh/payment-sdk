@@ -143,14 +143,23 @@ type env struct {
 	rule string
 	seq  int
 
-	mu       sync.Mutex
-	findings []string
-	skip     string
+	mu         sync.Mutex
+	findings   []string
+	skip       string
+	notChecked string // lượt không kiểm được vì connector cư xử hợp lệ mà luật không quan sát được (vào Report.NotChecked)
 }
 
 func (e *env) fail(format string, args ...any) {
 	e.mu.Lock()
 	e.findings = append(e.findings, fmt.Sprintf(format, args...))
+	e.mu.Unlock()
+}
+
+// notCheckedf: lượt không kết luận được dù connector không sai (ví dụ connector tự trả lại kết quả theo khoá
+// idempotency nên đối tác không nhận đủ request để so).
+func (e *env) notCheckedf(format string, args ...any) {
+	e.mu.Lock()
+	e.notChecked = fmt.Sprintf(format, args...)
 	e.mu.Unlock()
 }
 

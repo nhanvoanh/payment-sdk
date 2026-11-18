@@ -69,6 +69,10 @@ func (c *Connector) Methods() []paykit.Method { return []paykit.Method{paykit.Me
 
 // CreatePayment tạo thanh toán và trả URL để khách đi trả tiền.
 func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+	if req.CreatedAt.IsZero() {
+		// Chưa gửi gì: chắc chắn chưa xử lý. Đoán ngày (hay lấy đồng hồ) thì truy vấn sau này hỏi sai mã (luật ID-5).
+		return connector.CreatePaymentResult{}, notSent(errNoCreatedAt)
+	}
 	body := newPaymentRequest(req, c.cfg.Location)
 	resp, err := c.send(ctx, http.MethodPost, pathPayments, nil, req.IdempotencyKey, body)
 	if err != nil {
@@ -95,6 +99,11 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 // giao dịch chưa từng tới được acme), nên 404 not_found là Found=false chứ không phải lỗi: nếu là lỗi thì
 // core không bao giờ đóng được giao dịch đó.
 func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
+	if req.CreatedAt.IsZero() {
+		// Không dựng được mã đã gửi: KHÔNG trả Found=false (core có thể cho hết hạn một đơn khách đã trả), mà là
+		// chưa rõ kết quả để core hỏi lại sau (luật ID-5).
+		return connector.PaymentStatus{}, fmt.Errorf("%w: %s", connector.ErrUnknownOutcome, errNoCreatedAt)
+	}
 	order := orderCode(req.TransactionCode, req.CreatedAt, c.cfg.Location)
 	resp, err := c.send(ctx, http.MethodGet, pathPayments, url.Values{"order_code": {order}}, "", nil)
 	if err != nil {
@@ -404,6 +413,9 @@ func isNotFound(resp *providerhttp.Response) bool {
 func badBody(cause error) error {
 	return fmt.Errorf("%w: thân phản hồi của acme không hợp lệ: %v", connector.ErrUnknownOutcome, cause)
 }
+
+// errNoCreatedAt: core cũ chưa gửi CreatedAt. Thứ tự triển khai là core trước, connector sau.
+const errNoCreatedAt = "core chưa gửi CreatedAt — nâng core trước connector"
 
 // notSent: lỗi ta tự phát hiện trước khi gửi bất cứ gì tới acme, nên chắc chắn chưa xử lý.
 func notSent(reason string) error {

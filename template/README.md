@@ -54,7 +54,10 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
   (mặc định UTC), lấy từ `CreatedAt` core gửi — không bao giờ từ `time.Now()` (`orderCode` trong `wire.go`).
   Truy vấn dựng lại đúng mã từ `QueryPaymentRequest.CreatedAt`, kể cả khi lệnh tạo chưa nghe được trả lời (chưa
   có `payment_id`); webhook tách `yymmdd_` để trả lại mã giao dịch của core. Đổi `ACME_TIMEZONE` sau khi đã chạy
-  thật thì truy vấn giao dịch cũ dựng sai mã: chỉ đặt một lần. Luật `ID-4` kiểm điều này (`acmetest` cài
+  thật thì truy vấn giao dịch cũ dựng sai mã: chỉ đặt một lần. `CreatedAt` zero (core cũ: triển khai CORE TRƯỚC, connector sau) không bao giờ thành ngày: tạo trả
+  `ErrProviderUnavailable` (không gửi gì), truy vấn trả `ErrUnknownOutcome` (không bao giờ `Found=false`). Đổi định
+  dạng `order_code` của connector đang chạy thì phải truy vấn thử mã định dạng cũ khi mã mới không thấy.
+  Luật `ID-4`/`ID-5` kiểm điều này (`acmetest` cài
   `conformance.RequestRecorder`).
 - Trạng thái thanh toán: `pending`, `paid`, `failed`, `canceled`; hoàn tiền: `pending`, `refunded`, `failed`.
   Trạng thái lạ là lỗi, không đoán.
@@ -117,8 +120,8 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 
 ## Luật conformance
 
-Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã luật: `ID-1`..`ID-4` (tên, phương thức,
-khai năng lực, mã phía đối tác tất định), `PAY-1`..`PAY-7` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
+Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã luật: `ID-1`..`ID-5` (tên, phương thức,
+khai năng lực, mã phía đối tác tất định, không đoán ngày khi thiếu `CreatedAt`), `PAY-1`..`PAY-7` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
 từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-4` (truy vấn), `CHG-1` (thu ngay), `CXL-1`..`CXL-4` (huỷ: không báo `canceled` khi
 đã thu, khi treo hay thân rác; không đổi đối tác treo thành từ chối, kể cả khi thiếu `ProviderRef`; trả lời dứt khoát khi thiếu `ProviderRef`; đã thu thì trả "đã thu", không từ chối), `WHK-1`..`WHK-6`
 (webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-3` (hoàn tiền), `LOG-1` (vết không chứa dữ liệu khách), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).

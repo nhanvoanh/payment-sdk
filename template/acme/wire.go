@@ -107,8 +107,8 @@ func (c customerJSON) customer() paykit.Customer {
 
 // orderCode là mã đơn gửi acme: yymmdd (ngày TẠO giao dịch ở múi giờ loc) + "_" + mã giao dịch của core. Chỉ
 // dựng từ TransactionCode và CreatedAt mà core cấp (giống nhau ở mọi lần gọi lại), KHÔNG BAO GIỜ từ time.Now():
-// truy vấn một lệnh tạo chưa rõ kết quả phải dựng lại đúng mã đã gửi (luật ID-4). CreatedAt zero (core cũ) vẫn
-// tất định, chỉ là ngày vô nghĩa.
+// truy vấn một lệnh tạo chưa rõ kết quả phải dựng lại đúng mã đã gửi (luật ID-4). Người gọi phải từ chối
+// CreatedAt zero TRƯỚC khi gọi hàm này (luật ID-5): mã "010101_<mã>" không bao giờ tìm lại được sau khi nâng core.
 func orderCode(tx string, createdAt time.Time, loc *time.Location) string {
 	if loc == nil {
 		loc = time.UTC

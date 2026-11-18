@@ -29,6 +29,9 @@ import (
 
 var amount = paykit.Money{Amount: 150000, Currency: "VND"}
 
+// created0 là thời điểm tạo mà core gửi trong các request test (core luôn gửi giá trị đã lưu).
+var created0 = time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+
 // newPair dựng connector trỏ vào đối tác giả mới; mỗi test một cặp riêng.
 func newPair(tb testing.TB) (*acme.Connector, *acmetest.Partner) {
 	tb.Helper()
@@ -43,7 +46,7 @@ func newPair(tb testing.TB) (*acme.Connector, *acmetest.Partner) {
 func createReq(tx string) connector.CreatePaymentRequest {
 	return connector.CreatePaymentRequest{
 		TransactionCode: tx, IdempotencyKey: "idem-" + tx, Money: amount, Method: paykit.MethodWallet,
-		ReturnURL: "https://shop.example/return", CancelURL: "https://shop.example/cancel",
+		ReturnURL: "https://shop.example/return", CancelURL: "https://shop.example/cancel", CreatedAt: created0,
 	}
 }
 
@@ -451,7 +454,7 @@ func TestAcme_RefundRejectCodes(t *testing.T) {
 
 func TestAcme_QueryNotFoundByCodeAnyHTTPStatus(t *testing.T) {
 	ctx := context.Background()
-	st, err := errorStub(t, 400, "not_found").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X"})
+	st, err := errorStub(t, 400, "not_found").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X", CreatedAt: created0})
 	if err != nil || st.Found {
 		t.Errorf("QueryPayment: found=%v err=%v, cần Found=false không lỗi", st.Found, err)
 	}
@@ -459,7 +462,7 @@ func TestAcme_QueryNotFoundByCodeAnyHTTPStatus(t *testing.T) {
 	if err != nil || rs.Found {
 		t.Errorf("QueryRefund: found=%v err=%v, cần Found=false không lỗi", rs.Found, err)
 	}
-	_, err = errorStub(t, 400, "declined").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X"})
+	_, err = errorStub(t, 400, "declined").QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "X", CreatedAt: created0})
 	if !errors.Is(err, connector.ErrUnknownOutcome) || errors.Is(err, connector.ErrProviderRejected) {
 		t.Errorf("truy vấn với mã khác: err = %v, cần ErrUnknownOutcome", err)
 	}
@@ -577,5 +580,30 @@ func TestConfigFromEnv_Timezone(t *testing.T) {
 	}
 	if _, err := acme.ConfigFromEnv(env("Sao/Hoa")); err == nil || !strings.Contains(err.Error(), "ACME_TIMEZONE") {
 		t.Errorf("ACME_TIMEZONE sai: err = %v, cần nêu tên biến", err)
+	}
+}
+
+// CreatedAt zero (core cũ chưa gửi): KHÔNG BAO GIỜ đoán ngày. Tạo → ErrProviderUnavailable, không gửi gì tới acme
+// (mã "010101_<mã>" sẽ không bao giờ tìm lại được sau khi nâng core). Truy vấn → ErrUnknownOutcome, không bao giờ
+// Found=false (core có thể cho hết hạn một đơn khách đã trả).
+func TestAcme_ZeroCreatedAtNeverGuessesDate(t *testing.T) {
+	c, p := newPair(t)
+	ctx := context.Background()
+	req := createReq("TXZERO1")
+	req.CreatedAt = time.Time{}
+	_, err := c.CreatePayment(ctx, req)
+	if !errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) {
+		t.Fatalf("tạo với CreatedAt zero: err = %v, cần ErrProviderUnavailable", err)
+	}
+	if n := p.BusinessRequests(); n != 0 {
+		t.Fatalf("acme nhận %d request, cần 0", n)
+	}
+	req.CreatedAt = time.Date(2026, 11, 18, 1, 2, 3, 0, time.UTC)
+	if _, err := c.CreatePayment(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	st, err := c.QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "TXZERO1"})
+	if !errors.Is(err, connector.ErrUnknownOutcome) || st.Found {
+		t.Fatalf("truy vấn với CreatedAt zero: found=%v err=%v, cần ErrUnknownOutcome", st.Found, err)
 	}
 }

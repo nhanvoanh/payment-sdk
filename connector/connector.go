@@ -107,7 +107,12 @@ type RawWebhook struct {
 // lại). Connector sinh mã phía đối tác (ví dụ tiền tố yymmdd) TẤT ĐỊNH từ TransactionCode/RefundCode và các
 // thời điểm này, KHÔNG BAO GIỜ từ đồng hồ lúc gọi: truy vấn hay huỷ một lệnh tạo "chưa rõ kết quả" (không có
 // ProviderRef) phải dựng lại đúng mã đã gửi, nếu không đối tác trả "không thấy" cho một đơn khách đã trả (luật
-// ID-4). Múi giờ của ngày trong mã là việc của connector (đổi từ UTC). Core cũ không gửi thì giá trị là zero.
+// ID-4). Múi giờ của ngày trong mã là việc của connector (đổi từ UTC).
+//
+// Triển khai CORE TRƯỚC, connector sau. Core cũ không gửi thì giá trị là zero, và connector cần nó KHÔNG BAO GIỜ
+// đoán ngày (luật ID-5): tạo/thu trả ErrProviderUnavailable (chưa gửi gì); truy vấn, huỷ, hoàn, truy vấn hoàn trả
+// ErrUnknownOutcome, không bao giờ Found=false hay RejectedError. Đổi định dạng mã phía đối tác của connector đang
+// chạy thì mã mới "không tìm thấy" phải truy vấn thử mã định dạng cũ trước khi trả Found=false.
 
 type CreatePaymentRequest struct {
 	TransactionCode, IdempotencyKey string

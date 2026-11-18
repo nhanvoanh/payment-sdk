@@ -23,6 +23,7 @@ var rules = []rule{
 	{id: "ID-2", check: checkID2},
 	{id: "ID-3", check: checkID3},
 	{id: "ID-4", createPartner: true, check: checkID4},
+	{id: "ID-5", check: checkID5},
 	{id: "PAY-1", check: checkPAY1},
 	{id: "PAY-2", check: checkPAY2},
 	{id: "PAY-3", createPartner: true, check: checkPAY3},
@@ -116,7 +117,7 @@ func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]stri
 		}
 	}
 	e.mu.Lock()
-	skipped := e.skip != ""
+	skipped := e.skip != "" || e.notChecked != ""
 	e.mu.Unlock()
 	// Luật bị bỏ vì bước chuẩn bị hỏng: panic (nếu có) là của bước chuẩn bị, đã thuộc về PAY-1.
 	if e.srv != nil && !skipped {
@@ -126,6 +127,9 @@ func runOne(tb testing.TB, h Harness, r rule, code string, viaGRPC bool) ([]stri
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.notChecked != "" && len(e.findings) == 0 {
+		return nil, "", e.notChecked
+	}
 	return append([]string(nil), e.findings...), e.skip, ""
 }
 

@@ -40,7 +40,8 @@ thất bại), mọi lỗi khác là chưa rõ. Vì vậy:
   `Describe` qua gRPC hỏng. Nên đọc; có thể phải xử lý.
 - `NotChecked`: lượt mà bộ luật theo thiết kế không kiểm được, không bao giờ là việc của developer. Hiện có
   `WHK-6/grpc` (proxy trả ack từ bảng lấy một lần lúc Describe) và `CTX-1/grpc` (proxy gặp ctx đã huỷ thì
-  trả về ngay, không gửi). `Run` chỉ `t.Log` các mục này, không tạo subtest.
+  trả về ngay, không gửi); và `ID-4` khi connector tự trả lại kết quả theo khoá idempotency nên đối tác giả
+  không nhận đủ request để so. `Run` chỉ `t.Log` các mục này, không tạo subtest.
 
 ## Luật
 
@@ -51,7 +52,8 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `ID-1` | `Name()` khớp `^[a-z][a-z0-9_]{0,31}$` và không đổi giữa hai lần gọi; qua gRPC: `Describe` thành công. | Tên là khoá cấu hình và khoá khử trùng webhook; tên đổi thì một sự kiện có thể bị áp hai lần, tên sai thì core không nạp được connector. |
 | `ID-2` | `Methods()` không rỗng, không trùng, có `Harness.Method`. | Core định tuyến giao dịch theo phương thức; thiếu thì khách không trả tiền được qua đối tác này. |
 | `ID-3` | `Supports(op)` đúng ⇒ connector cài interface tương ứng (`connector.As…` đúng). | Khai mà không cài thì lệnh huỷ/hoàn tiền nhận `ErrNotSupported` lúc chạy. |
-| `ID-4` | (cần `Harness.CreateCallsPartner` và `Partner` cài `RequestRecorder`; không cài thì `Skipped`) `CreatePayment` hai lần với CÙNG request, lần hai sau khi đồng hồ qua một ranh giới giây → mã đơn đối tác giả ghi nhận giống nhau; và mã không mang ngày hôm nay (`yyyymmdd`/`yymmdd` ở UTC hay UTC+7) khi `CreatedAt` ở ngày khác. | Connector phải dựng mã phía đối tác TẤT ĐỊNH từ `TransactionCode`/`RefundCode` + `CreatedAt` (core cấp, giá trị đã lưu, UTC, micro giây, như nhau ở mọi lần gọi lại), không từ đồng hồ lúc gọi. Không thì truy vấn/huỷ một lệnh tạo chưa rõ kết quả (chưa có `ProviderRef`) hỏi sai mã, đối tác báo không thấy và core cho hết hạn một đơn khách đã trả. |
+| `ID-4` | (cần `Harness.CreateCallsPartner` và `Partner` cài `RequestRecorder`; không cài thì `Skipped`) Ba lần `CreatePayment`, không chờ: hai lần liên tiếp CÙNG request → cùng mã đơn (bắt số ngẫu nhiên, nano giây, bộ đếm); mã không mang ngày hôm nay (`yyyymmdd`/`yymmdd` ở UTC hay UTC+7) khi `CreatedAt` ở ngày khác; lần ba cùng request nhưng `CreatedAt` lệch ba ngày → nếu mã lần một mang ngày của `CreatedAt` (dạng nhận ra được) thì mã lần ba phải mang ngày mới (mã không mang ngày nhận ra được thì không xét lần ba). Đối tác giả không nhận đủ ba request (connector tự trả lại kết quả theo khoá idempotency) → `NotChecked` kèm lý do. Đồng hồ ở mức giây/phút trong mã không bị bắt khi hai lần gọi rơi cùng một giây. | Connector phải dựng mã phía đối tác TẤT ĐỊNH từ `TransactionCode`/`RefundCode` + `CreatedAt` (core cấp, giá trị đã lưu, UTC, micro giây, như nhau ở mọi lần gọi lại), không từ đồng hồ lúc gọi. Không thì truy vấn/huỷ một lệnh tạo chưa rõ kết quả (chưa có `ProviderRef`) hỏi sai mã, đối tác báo không thấy và core cho hết hạn một đơn khách đã trả. |
+| `ID-5` | (mọi connector) `CreatePayment` với `CreatedAt` zero → `ErrProviderUnavailable` (và đối tác giả có `RequestRecorder` không nhận request nào), hoặc thành công với mã KHÔNG mang ngày 0001-01-01 (`010101`/`00010101`); lỗi khác là vi phạm. (có `query_payment`) truy vấn với `CreatedAt` zero một giao dịch đã tạo, đối tác báo đã thu → `Found` đúng hoặc `ErrUnknownOutcome`; `Found=false` hay lỗi khác là vi phạm. Bước chuẩn bị (tạo bình thường) hỏng thì bỏ, xem `PAY-1`. | `CreatedAt` zero nghĩa là core cũ chưa gửi trường này (triển khai sai thứ tự). Đoán ngày thì lệnh tạo gửi `010101_<mã>`; sau khi nâng core, truy vấn hỏi mã với ngày thật, đối tác báo không thấy và core cho hết hạn một đơn khách đã trả. |
 | `PAY-1` | Create ở `ModeNormal`: không lỗi; `Status` thuộc pending, succeeded, failed, canceled, on_hold; `NextAction` redirect có URL tuyệt đối http(s), show_qr có `QRData`; `NextAction.Kind` ngoài none/redirect/show_qr/rỗng bị từ chối. | Khách không tới được trang thanh toán hoặc core không biết đã thu tiền chưa. |
 | `PAY-2` | `ProviderRef` là UTF-8 hợp lệ, không ký tự điều khiển, tối đa 255 ký tự. | Dài hơn thì core cắt và gửi bản bị cắt cho đối tác ở lệnh truy vấn/hoàn sau: đối tác không nhận ra giao dịch. |
 | `PAY-3` | `ModeDown` (từ chối kết nối) → lỗi khớp `ErrProviderUnavailable`, không khớp `ErrUnknownOutcome`/`ErrProviderRejected`. | Chỉ lỗi này cho core chốt thất bại ngay để khách tạo lại thanh toán; sai thì giao dịch treo. |
@@ -80,10 +82,18 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `LOG-1` | Khách mang chuỗi canh (tên có dấu `Huỳnh Canaryname`, email có `+`, điện thoại đầu `0`, địa chỉ nhiều dòng). Create (và Charge nếu có) mang khách đó; rồi trên chính giao dịch đó, mỗi thao tác đã khai: truy vấn, `ParseWebhook` của webhook đối tác giả ký, hoàn, truy vấn hoàn, huỷ. `RawExchange.RequestBody`, `ResponseBody`, câu lỗi và `ProviderEvent.Raw` (được phép rỗng) không còn chuỗi canh ở dạng thô, JSON-escape (kể cả `\uXXXX` hoa/thường, `\/`, JSON lồng hai lần), URL-encode (`QueryEscape`, `PathEscape`), khác hoa thường, bỏ dấu tiếng Việt (`HUYNH CANARYNAME`), (điện thoại) dạng `84…`/`+84…`/có dấu phân cách, (địa chỉ) một dòng dài của nó; và không còn một CHỮ nào của tên (có dấu hay bỏ dấu) đứng thành từ riêng (`{"first":"Canaryname","last":"Huỳnh"}`). Cách so là gói `redact`, cùng thuật toán với `providerhttp.RedactCustomer` và core. | Vết lời gọi đối tác (bảng `provider_requests`), `provider_events` và log của core lưu dữ liệu cá nhân của khách. Core che lại lần nữa nhưng chỉ với giá trị nó biết, và không che chữ của tên đã bỏ dấu khi đứng riêng (để không che thừa "Thanh toan"): connector đổi cách viết hay tách họ/tên thì chỉ connector che được. |
 | `CTX-1` | Mọi thao tác gọi mạng (Create, Charge, Query, Cancel, Refund, QueryRefund đã khai) nhận ctx đã huỷ, đối tác treo → trả về trong 2 s, không panic. | Core không dừng được lời gọi khi tắt máy hay khi khách bỏ đi. |
 
-`Harness.CreateCallsPartner == false` (Create chỉ ký tại chỗ) thì `ID-4` và `PAY-3`..`PAY-6` bị bỏ.
+`Harness.CreateCallsPartner == false` (Create chỉ ký tại chỗ) thì `ID-4` và `PAY-3`..`PAY-6` bị bỏ (`ID-5` vẫn chạy).
 
 Mọi request bộ luật gửi mang `CreatedAt` (và `TransactionCreatedAt` ở hoàn tiền) cố định ở quá khứ như core
 gửi giá trị đã lưu, nên connector dựng mã từ `CreatedAt` tìm lại được giao dịch ở truy vấn, huỷ và hoàn.
+
+**Hợp đồng `CreatedAt` khi triển khai.** Thứ tự là CORE TRƯỚC, connector sau. Connector gặp thời điểm cần dùng
+bằng zero (core cũ) KHÔNG BAO GIỜ đoán ngày hay lấy đồng hồ: lệnh tạo/thu trả `ErrProviderUnavailable` (chưa
+gửi gì; ví dụ "core chưa gửi CreatedAt — nâng core trước connector"); truy vấn, huỷ, hoàn, truy vấn hoàn trả
+`ErrUnknownOutcome`, không bao giờ `Found=false` hay lời từ chối. Thao tác không dùng thời điểm (ví dụ huỷ theo
+`ProviderRef`) thì bỏ qua nó. Connector ĐỔI định dạng mã đơn phía đối tác (ví dụ thêm ngày) phải có bước chuyển
+tiếp: mã mới "không tìm thấy" thì truy vấn thử mã định dạng cũ trước khi trả `Found=false`, cho tới khi mọi giao
+dịch tạo bằng định dạng cũ đã kết thúc.
 
 Đối tác giả nên làm như đối tác thật: nhớ khách gửi lúc tạo và nhắc lại trong phản hồi truy vấn (như
 `acmetest`), để `LOG-1` kiểm được cả việc connector che phản hồi. Che bằng `providerhttp.RedactCustomer(body, khách)` hoặc `RedactValues(body, giá trị...)`.

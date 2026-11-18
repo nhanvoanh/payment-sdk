@@ -154,6 +154,9 @@ func newGood(tb testing.TB) (*connectortest.Fake, *fakePartner) {
 	tb.Cleanup(func() { close(p.release) })
 	f := connectortest.New("acme", paykit.MethodVisa, paykit.MethodQR)
 	f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+		if req.CreatedAt.IsZero() { // mã mang ngày tạo: không đoán ngày, chưa gửi gì (ID-5)
+			return connector.CreatePaymentResult{}, fmt.Errorf("%w: core chưa gửi CreatedAt", connector.ErrProviderUnavailable)
+		}
 		if err := p.call(ctx); err != nil {
 			return connector.CreatePaymentResult{}, err
 		}
@@ -1406,7 +1409,7 @@ func TestCheck_RedactedRawPasses(t *testing.T) {
 	}
 }
 
-// Mã đơn phía đối tác dựng từ đồng hồ lúc gọi (giờ:phút:giây) thay vì CreatedAt: ID-4 bắt, cả qua gRPC.
+// Mã đơn phía đối tác dựng từ đồng hồ lúc gọi (nano giây, như một nonce) thay vì CreatedAt: ID-4 bắt, cả qua gRPC.
 func TestCheck_Catches_OrderCodeFromWallClock(t *testing.T) {
 	t.Parallel()
 	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
@@ -1414,7 +1417,7 @@ func TestCheck_Catches_OrderCodeFromWallClock(t *testing.T) {
 			if err := p.call(ctx); err != nil {
 				return connector.CreatePaymentResult{}, err
 			}
-			p.recordOrder(time.Now().Format("060102150405") + "_" + req.TransactionCode)
+			p.recordOrder(fmt.Sprintf("%d_%s", time.Now().UnixNano(), req.TransactionCode))
 			return connector.CreatePaymentResult{ProviderRef: "acme_" + req.TransactionCode, Status: connector.StatusPending,
 				NextAction: paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.acme.example/x"}}, nil
 		}
@@ -1529,5 +1532,114 @@ func TestCheck_Catches_CustomerEchoedByOtherOperations(t *testing.T) {
 			t.Parallel()
 			expectBoth(t, conformance.Check(t, harness(wrap(set))), "LOG-1")
 		})
+	}
+}
+
+// createRecording thay OnCreate của connector tốt: gọi đối tác giả, ghi mã do code dựng, trả pending. refuseZero:
+// CreatedAt zero thì ErrProviderUnavailable, không gọi đối tác (như connector tốt).
+func createRecording(f *connectortest.Fake, p *fakePartner, refuseZero bool, code func(req connector.CreatePaymentRequest) string) {
+	f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+		if refuseZero && req.CreatedAt.IsZero() {
+			return connector.CreatePaymentResult{}, connector.ErrProviderUnavailable
+		}
+		if err := p.call(ctx); err != nil {
+			return connector.CreatePaymentResult{}, err
+		}
+		p.recordOrder(code(req))
+		return connector.CreatePaymentResult{ProviderRef: "acme_" + req.TransactionCode, Status: connector.StatusPending,
+			NextAction: paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.acme.example/x"}}, nil
+	}
+}
+
+// Mã mang ngày của CreatedAt lần đầu rồi nhớ theo mã giao dịch: CreatedAt khác ngày vẫn ra mã cũ. ID-4 bắt.
+func TestCheck_Catches_OrderCodeIgnoresLaterCreatedAt(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		var mu sync.Mutex
+		first := map[string]string{}
+		createRecording(f, p, true, func(req connector.CreatePaymentRequest) string {
+			mu.Lock()
+			defer mu.Unlock()
+			if c, ok := first[req.TransactionCode]; ok {
+				return c
+			}
+			first[req.TransactionCode] = orderCode(req)
+			return first[req.TransactionCode]
+		})
+		return f
+	}))
+	expectBoth(t, r, "ID-4")
+}
+
+// Connector tự trả lại kết quả theo khoá idempotency (không gọi đối tác lần hai): ID-4 không so được, vào
+// NotChecked kèm lý do, không phải vi phạm hay Skipped.
+func TestCheck_ID4_NotCheckedWhenConnectorCaches(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnCreate
+		var mu sync.Mutex
+		cache := map[string]connector.CreatePaymentResult{}
+		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			mu.Lock()
+			res, ok := cache[req.IdempotencyKey]
+			mu.Unlock()
+			if ok {
+				return res, nil
+			}
+			res, err := good(ctx, req)
+			if err == nil {
+				mu.Lock()
+				cache[req.IdempotencyKey] = res
+				mu.Unlock()
+			}
+			return res, err
+		}
+		return f
+	}))
+	if slices.Contains(rules(r), "ID-4") || slices.Contains(rules(r), "ID-4/grpc") {
+		t.Fatalf("ID-4 không được bắn:%s", dump(r))
+	}
+	for _, code := range []string{"ID-4", "ID-4/grpc"} {
+		if !slices.ContainsFunc(r.NotChecked, func(s string) bool { return strings.HasPrefix(s, code+": ") && strings.Contains(s, "idempotency") }) {
+			t.Errorf("thiếu %s trong NotChecked: %v", code, r.NotChecked)
+		}
+	}
+}
+
+// CreatedAt zero (core cũ): connector đoán ngày 0001-01-01 vào mã đơn. ID-5 bắt.
+func TestCheck_Catches_ZeroCreatedAtBecomesDate(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		createRecording(f, p, false, orderCode)
+		return f
+	}))
+	expectBoth(t, r, "ID-5")
+}
+
+// CreatedAt zero ở truy vấn: connector dựng mã sai rồi trả Found=false (đối tác "không thấy"). ID-5 bắt.
+func TestCheck_Catches_QueryZeroCreatedAtNotFound(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnQuery
+		f.OnQuery = func(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
+			if req.CreatedAt.IsZero() {
+				return connector.PaymentStatus{Found: false}, nil
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	expectBoth(t, r, "ID-5")
+}
+
+// Connector không dùng ngày (mã = mã giao dịch): tạo với CreatedAt zero thành công và truy vấn thấy giao dịch, hợp lệ.
+func TestCheck_ID5_DatelessConnectorPasses(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		createRecording(f, p, false, func(req connector.CreatePaymentRequest) string { return req.TransactionCode })
+		return f
+	}))
+	if len(r.Findings) != 0 {
+		t.Fatalf("connector không dùng ngày không được có finding:%s", dump(r))
 	}
 }
