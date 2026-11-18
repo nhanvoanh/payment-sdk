@@ -1751,7 +1751,7 @@ func TestCheck_Catches_CustomerDataInRawOnError(t *testing.T) {
 	for _, op := range []string{"create", "charge"} {
 		t.Run(op, func(t *testing.T) {
 			t.Parallel()
-			r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
 				if op == "create" {
 					good := f.OnCreate
 					f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
