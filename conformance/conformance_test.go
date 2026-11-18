@@ -31,7 +31,28 @@ type fakePartner struct {
 	reqs    int      // request nghiệp vụ đã nhận (conformance.RequestCounter)
 	orders  []string // mã đơn của các lệnh tạo đã nhận (conformance.RequestRecorder)
 	pays    map[string]paid
-	release chan struct{} // đóng khi test xong, để goroutine của connector treo được giải phóng
+	expiry  map[string]time.Time // hạn phiên đối tác đặt cho mỗi giao dịch (conformance.ExpiryReporter)
+	release chan struct{}        // đóng khi test xong, để goroutine của connector treo được giải phóng
+}
+
+// PaymentExpiry cài conformance.ExpiryReporter.
+func (p *fakePartner) PaymentExpiry(tx string) (time.Time, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.expiry[tx]
+	return e, ok
+}
+
+// expiryOf: hạn phiên đối tác đặt lúc nhận lệnh tạo đầu tiên của tx (15 phút, tới giây, UTC).
+func (p *fakePartner) expiryOf(tx string) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.expiry[tx]; ok {
+		return e
+	}
+	e := time.Now().Add(15 * time.Minute).UTC().Truncate(time.Second)
+	p.expiry[tx] = e
+	return e
 }
 
 type paid struct {
@@ -150,7 +171,7 @@ func (p *fakePartner) hang(ctx context.Context) {
 
 // newGood dựng connector viết đúng trên Fake cùng đối tác giả của nó.
 func newGood(tb testing.TB) (*connectortest.Fake, *fakePartner) {
-	p := &fakePartner{pays: map[string]paid{}, release: make(chan struct{})}
+	p := &fakePartner{pays: map[string]paid{}, expiry: map[string]time.Time{}, release: make(chan struct{})}
 	tb.Cleanup(func() { close(p.release) })
 	f := connectortest.New("acme", paykit.MethodVisa, paykit.MethodQR)
 	f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
@@ -165,6 +186,7 @@ func newGood(tb testing.TB) (*connectortest.Fake, *fakePartner) {
 			ProviderRef: "acme_" + req.TransactionCode,
 			Status:      connector.StatusPending,
 			NextAction:  paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.acme.example/" + req.TransactionCode},
+			ExpiresAt:   p.expiryOf(req.TransactionCode),
 		}, nil
 	}
 	f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
@@ -988,13 +1010,15 @@ func TestCheck_CancelWithoutRefOnHang_SkippedWithoutCounter(t *testing.T) {
 			t.Errorf("thiếu %s trong Skipped với lý do nêu RequestCounter: %v", code, r.Skipped)
 		}
 	}
-	others := slices.DeleteFunc(slices.Clone(r.Skipped), func(s string) bool { return strings.HasPrefix(s, "ID-4") })
+	others := slices.DeleteFunc(slices.Clone(r.Skipped), func(s string) bool {
+		return strings.HasPrefix(s, "ID-4") || strings.HasPrefix(s, "PAY-8") // thiếu RequestRecorder, ExpiryReporter
+	})
 	if len(others) != 2 {
 		t.Errorf("ngoài ID-4 (thiếu RequestRecorder), chỉ lượt thêm của CXL-2 bị bỏ: %v", r.Skipped)
 	}
 }
 
-// plainPartner giấu mọi interface tuỳ chọn của đối tác giả (RequestCounter, RequestRecorder).
+// plainPartner giấu mọi interface tuỳ chọn của đối tác giả (RequestCounter, RequestRecorder, ExpiryReporter).
 type plainPartner struct{ conformance.Partner }
 
 // Các câu trả lời dứt khoát đều qua CXL-3.
@@ -1738,4 +1762,92 @@ func TestCheck_Catches_CustomerDataInRawOnError(t *testing.T) {
 			expectBoth(t, r, "LOG-1")
 		})
 	}
+}
+
+// expiryWrap: connector tốt nhưng ExpiresAt của lệnh tạo đổi bằng f (nhận hạn đối tác đặt).
+func expiryWrap(f func(partnerSet time.Time) time.Time) func(*connectortest.Fake, *fakePartner) connector.Connector {
+	return func(fk *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := fk.OnCreate
+		fk.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			res, err := good(ctx, req)
+			if err == nil {
+				res.ExpiresAt = f(res.ExpiresAt)
+			}
+			return res, err
+		}
+		return fk
+	}
+}
+
+// ExpiresAt ở quá khứ, sát hiện tại, hay quá 7 ngày: PAY-8 bắt, cả qua gRPC.
+func TestCheck_Catches_ExpiryOutOfRange(t *testing.T) {
+	for name, f := range map[string]func(time.Time) time.Time{
+		"quá khứ":          func(time.Time) time.Time { return time.Now().Add(-time.Minute).UTC() },
+		"chưa tới 1 phút":  func(time.Time) time.Time { return time.Now().Add(30 * time.Second).UTC() },
+		"quá 7 ngày":       func(time.Time) time.Time { return time.Now().Add(7*24*time.Hour + time.Hour).UTC() },
+		"mặc định 30 ngày": func(time.Time) time.Time { return time.Now().AddDate(0, 0, 30).UTC() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			expectBoth(t, conformance.Check(t, harness(expiryWrap(f))), "PAY-8")
+		})
+	}
+}
+
+// Đối tác gửi hạn giờ địa phương (UTC+7) không kèm offset, connector coi là UTC: hạn trễ 7 giờ nhưng vẫn trong
+// khoảng. PAY-8 bắt nhờ ExpiryReporter, cả qua gRPC.
+func TestCheck_Catches_ExpiryWrongZone(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(expiryWrap(func(set time.Time) time.Time {
+		local := set.In(time.FixedZone("UTC+7", 7*3600))
+		return time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), local.Minute(), local.Second(), 0, time.UTC)
+	})))
+	expectBoth(t, r, "PAY-8")
+}
+
+// Đúng thời điểm nhưng Location khác UTC: PAY-8 bắt ở lượt thẳng (gRPC luôn chở UTC nên lượt /grpc qua).
+func TestCheck_Catches_ExpiryNotUTC(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(expiryWrap(func(set time.Time) time.Time {
+		return set.In(time.FixedZone("UTC+7", 7*3600))
+	})))
+	expectOnly(t, r, "PAY-8")
+	if slices.Contains(rules(r), "PAY-8/grpc") {
+		t.Errorf("PAY-8/grpc không được bắn (gRPC chở thời điểm, không chở múi giờ):%s", dump(r))
+	}
+}
+
+// ExpiresAt zero (đối tác không báo hạn) là hợp lệ.
+func TestCheck_ZeroExpiryPasses(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(expiryWrap(func(time.Time) time.Time { return time.Time{} })))
+	if len(r.Findings) != 0 {
+		t.Fatalf("ExpiresAt zero không được có finding:%s", dump(r))
+	}
+}
+
+// Đối tác giả không cài ExpiryReporter: PAY-8 vẫn kiểm khoảng (bắt hạn quá 7 ngày) và, khi không có vi phạm, vào
+// Skipped với lý do nêu ExpiryReporter; lệch múi giờ trong khoảng thì không bắt được.
+func TestCheck_PAY8_WithoutReporter(t *testing.T) {
+	t.Parallel()
+	h := func(f func(time.Time) time.Time) conformance.Harness {
+		h := harness(expiryWrap(f))
+		inner := h.New
+		h.New = func(tb testing.TB) (connector.Connector, conformance.Partner) {
+			c, p := inner(tb)
+			return c, plainPartner{p}
+		}
+		return h
+	}
+	r := conformance.Check(t, h(func(set time.Time) time.Time { return set.Add(7 * time.Hour) }))
+	if slices.Contains(rules(r), "PAY-8") || slices.Contains(rules(r), "PAY-8/grpc") {
+		t.Fatalf("không có ExpiryReporter thì lệch trong khoảng không bắt được:%s", dump(r))
+	}
+	for _, code := range []string{"PAY-8", "PAY-8/grpc"} {
+		if !slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, code+": ") && strings.Contains(s, "ExpiryReporter") }) {
+			t.Errorf("thiếu %s trong Skipped với lý do nêu ExpiryReporter: %v", code, r.Skipped)
+		}
+	}
+	r = conformance.Check(t, h(func(time.Time) time.Time { return time.Now().AddDate(0, 0, 30).UTC() }))
+	expectBoth(t, r, "PAY-8")
 }

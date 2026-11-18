@@ -31,6 +31,7 @@ var rules = []rule{
 	{id: "PAY-5", createPartner: true, check: checkPAY5},
 	{id: "PAY-6", createPartner: true, check: checkPAY6},
 	{id: "PAY-7", check: checkPAY7},
+	{id: "PAY-8", check: checkPAY8},
 	{id: "QRY-1", op: connector.OpQueryPayment, check: checkQRY1},
 	{id: "QRY-2", op: connector.OpQueryPayment, check: checkQRY2},
 	{id: "QRY-3", op: connector.OpQueryPayment, check: checkQRY3},

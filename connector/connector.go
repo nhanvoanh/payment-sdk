@@ -132,8 +132,13 @@ type CreatePaymentResult struct {
 	ProviderRef string
 	Status      Status
 	NextAction  paykit.NextAction
-	ExpiresAt   time.Time
-	Raw         RawExchange
+	// ExpiresAt là hạn của phiên thanh toán PHÍA ĐỐI TÁC (sau thời điểm này khách không trả được nữa), ở UTC
+	// (t.UTC(); đối tác ghi giờ địa phương thì đổi đúng múi giờ/offset của nó, đừng coi giờ địa phương là UTC).
+	// Zero nghĩa là đối tác không báo: core dùng hạn mặc định của nó. Core chỉ nhận hạn trong
+	// (now + 1 phút, now + 7 ngày]; ngoài khoảng core bỏ hạn đó (giữ hạn mặc định), nên connector gặp hạn ngoài
+	// khoảng thì trả zero, không tự chế hạn (luật PAY-8). ChargeResult không có trường này.
+	ExpiresAt time.Time
+	Raw       RawExchange
 }
 
 type QueryPaymentRequest struct {

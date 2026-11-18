@@ -2,6 +2,7 @@ package acme_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -681,4 +682,38 @@ func TestAcme_RawReturnedOnErrorBranches(t *testing.T) {
 		}
 		leaks(t, "tạo khi treo", res.Raw)
 	})
+}
+
+// expires_at của acme mang offset +07:00: connector trả đúng thời điểm đó ở UTC. Ngoài (now + 1 phút, now + 7 ngày]
+// thì trả zero ("không báo"), không tự chế hạn.
+func TestAcme_ExpiresAtIsUTCAndBounded(t *testing.T) {
+	c, p := newPair(t)
+	res, err := c.CreatePayment(context.Background(), createReq("TEXP"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, ok := p.PaymentExpiry("TEXP")
+	if !ok || !res.ExpiresAt.Equal(want) || res.ExpiresAt.Location() != time.UTC {
+		t.Fatalf("ExpiresAt = %v, cần %v ở UTC", res.ExpiresAt, want)
+	}
+	for name, exp := range map[string]string{
+		"quá khứ":    time.Now().Add(-time.Hour).Format(time.RFC3339),
+		"quá 7 ngày": time.Now().AddDate(0, 0, 8).Format(time.RFC3339),
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := stub(t, goodToken, func(w http.ResponseWriter, r *http.Request) {
+				var in struct {
+					OrderCode string `json:"order_code"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&in)
+				w.WriteHeader(201)
+				_ = json.NewEncoder(w).Encode(map[string]string{"payment_id": "p1", "order_code": in.OrderCode, "status": "pending",
+					"redirect_url": "https://pay.acme.example/x", "expires_at": exp})
+			})
+			res, err := s.CreatePayment(context.Background(), createReq("TEXPOUT"))
+			if err != nil || !res.ExpiresAt.IsZero() {
+				t.Fatalf("err = %v, ExpiresAt = %v; cần thành công với ExpiresAt zero", err, res.ExpiresAt)
+			}
+		})
+	}
 }

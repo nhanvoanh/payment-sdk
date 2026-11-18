@@ -243,6 +243,63 @@ func checkPAY7(e *env) {
 	}
 }
 
+// Khoảng core nhận hạn phiên connector báo: (now + 1 phút, now + 7 ngày]; ngoài khoảng core bỏ hạn đó.
+const (
+	minExpiryAhead = time.Minute
+	maxExpiryAhead = 7 * 24 * time.Hour
+	expiryTol      = time.Second // đối tác có thể chỉ gửi tới giây
+)
+
+// checkPAY8: ExpiresAt của lệnh tạo, nếu khác zero, là hạn phiên phía đối tác ở UTC: trong (now + 1 phút,
+// now + 7 ngày], Location UTC (lượt thẳng; gRPC luôn chở UTC), và (Partner cài ExpiryReporter) đúng thời điểm đối
+// tác giả đã đặt — bắt connector đọc giờ địa phương của đối tác như UTC.
+func checkPAY8(e *env) {
+	e.p.SetMode(ModeNormal)
+	tx := e.tx()
+	ctx, cancel := normalCtx()
+	defer cancel()
+	before := time.Now()
+	res, ok, err := e.create(ctx, callLimit+time.Second, e.createReq(tx))
+	if !ok {
+		return
+	}
+	if err != nil {
+		e.skipf("CreatePayment ở ModeNormal lỗi nên không có ExpiresAt để kiểm (xem PAY-1)")
+		return
+	}
+	got := res.ExpiresAt
+	after := time.Now()
+	if !got.IsZero() {
+		const why = "core chỉ nhận hạn trong (now + 1 phút, now + 7 ngày] và bỏ hạn ngoài khoảng, nên phiên của khách dùng hạn mặc định của core thay vì hạn thật của đối tác"
+		switch {
+		case !got.After(after.Add(minExpiryAhead)):
+			e.fail("CreatePayment trả ExpiresAt %s, không quá 1 phút sau lúc gọi (%s); cần hạn phiên của đối tác ở tương lai, hoặc zero nếu đối tác không báo; %s", got.Format(time.RFC3339Nano), after.UTC().Format(time.RFC3339), why)
+		case got.After(before.Add(maxExpiryAhead)):
+			e.fail("CreatePayment trả ExpiresAt %s, quá 7 ngày sau lúc gọi (%s); cần hạn phiên của đối tác, không quá 7 ngày, hoặc zero; %s", got.Format(time.RFC3339Nano), before.UTC().Format(time.RFC3339), why)
+		}
+		if got.Location() != time.UTC {
+			e.fail("CreatePayment trả ExpiresAt %s ở múi giờ %q; cần UTC (t.UTC()); mọi thời điểm trao cho core là UTC", got.Format(time.RFC3339Nano), got.Location())
+		}
+	}
+	rep, has := e.p.(ExpiryReporter)
+	if !has {
+		e.skipf("lượt so ExpiresAt với hạn đối tác đặt không kiểm được (chỉ kiểm khoảng): Partner cần cài conformance.ExpiryReporter")
+		return
+	}
+	var want time.Time
+	var set bool
+	if g := guard(callLimit, func() { want, set = rep.PaymentExpiry(tx) }); g != nil {
+		e.skipf("Partner.PaymentExpiry hỏng: %v", g)
+		return
+	}
+	if !set || got.IsZero() {
+		return // đối tác không báo hạn, hoặc connector không báo: core dùng hạn mặc định
+	}
+	if d := got.Sub(want); d >= expiryTol || d <= -expiryTol {
+		e.fail("CreatePayment trả ExpiresAt %s trong khi đối tác đặt hạn %s (lệch %v); cần đúng thời điểm đối tác báo, đổi sang UTC (đọc múi giờ/offset của đối tác, không coi giờ địa phương là UTC); core cho phiên hết hạn sai giờ: huỷ khi khách còn đang trả, hoặc giữ đơn quá lâu", got.UTC().Format(time.RFC3339Nano), want.UTC().Format(time.RFC3339Nano), d)
+	}
+}
+
 func (e *env) querier() connector.PaymentQuerier { q, _ := e.c.(connector.PaymentQuerier); return q }
 
 func (e *env) query(req connector.QueryPaymentRequest) (connector.PaymentStatus, bool, error) {

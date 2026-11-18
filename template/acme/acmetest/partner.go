@@ -34,10 +34,18 @@ var (
 
 	_ conformance.RequestCounter  = (*Partner)(nil)
 	_ conformance.RequestRecorder = (*Partner)(nil)
+	_ conformance.ExpiryReporter  = (*Partner)(nil)
 )
+
+// acmeZone: acme ghi thời điểm theo giờ của nó (UTC+7) kèm offset, như nhiều đối tác thật; connector phải đổi về UTC.
+var acmeZone = time.FixedZone("ICT", 7*3600)
+
+// sessionTTL là hạn phiên thanh toán acme đặt lúc tạo.
+const sessionTTL = 15 * time.Minute
 
 type payment struct {
 	ID, OrderCode, Status string
+	ExpiresAt             time.Time // hạn phiên acme đặt lúc nhận lệnh tạo; zero nếu chưa tạo
 	Paid                  paykit.Money
 	Customer              customerJSON // acme nhắc lại khách trong mọi phản hồi thanh toán, như nhiều đối tác thật
 }
@@ -126,6 +134,16 @@ func (p *Partner) OrderCodes() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.orders...)
+}
+
+// PaymentExpiry cài conformance.ExpiryReporter: hạn phiên acme đã đặt vào phản hồi tạo của giao dịch tx.
+func (p *Partner) PaymentExpiry(tx string) (time.Time, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pay := p.byTx[tx]; pay != nil && !pay.ExpiresAt.IsZero() {
+		return pay.ExpiresAt, true
+	}
+	return time.Time{}, false
 }
 
 // txOf tách mã giao dịch khỏi order_code "yymmdd_<mã>" (giao thức acme); ok sai nếu sai dạng.
@@ -348,14 +366,19 @@ type paymentJSON struct {
 	OrderCode   string       `json:"order_code"`
 	Status      string       `json:"status"`
 	RedirectURL string       `json:"redirect_url,omitempty"`
+	ExpiresAt   string       `json:"expires_at,omitempty"`
 	AmountPaid  int64        `json:"amount_paid,omitempty"`
 	Currency    string       `json:"currency,omitempty"`
 	Customer    customerJSON `json:"customer"`
 }
 
 func (pay *payment) json() paymentJSON {
-	return paymentJSON{PaymentID: pay.ID, OrderCode: pay.OrderCode, Status: pay.Status, AmountPaid: pay.Paid.Amount,
+	out := paymentJSON{PaymentID: pay.ID, OrderCode: pay.OrderCode, Status: pay.Status, AmountPaid: pay.Paid.Amount,
 		Currency: pay.Paid.Currency, Customer: pay.Customer}
+	if !pay.ExpiresAt.IsZero() {
+		out.ExpiresAt = pay.ExpiresAt.In(acmeZone).Format(time.RFC3339) // ví dụ 2026-11-18T16:15:00+07:00
+	}
+	return out
 }
 
 func (p *Partner) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -387,6 +410,7 @@ func (p *Partner) handleCreate(w http.ResponseWriter, r *http.Request) {
 			pay = p.newPayment(tx, in.OrderCode)
 		}
 		pay.Customer = in.Customer
+		pay.ExpiresAt = time.Now().Add(sessionTTL).Truncate(time.Second)
 		p.created++
 	}
 	out := pay.json()

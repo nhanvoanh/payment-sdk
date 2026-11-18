@@ -61,6 +61,7 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `PAY-5` | `ModeReject` → lỗi khớp `ErrProviderRejected` (nên dùng `RejectedError`), không khớp `ErrUnknownOutcome`. | Lời từ chối rõ ràng mà báo khác thì giao dịch treo chờ truy vấn thay vì báo khách ngay. |
 | `PAY-6` | `ModeGarbage` (200 với thân không hiểu được) → lỗi "chưa rõ theo core". | Đối tác đã trả lời, có thể đã nhận tiền; chốt thất bại thì khách trả hai lần. |
 | `PAY-7` | Create hai lần cùng `TransactionCode` và `IdempotencyKey` → không panic. | Core gửi lại cùng khoá khi không rõ kết quả; panic thì giao dịch kẹt. |
+| `PAY-8` | Create ở `ModeNormal`: `ExpiresAt` zero (đối tác không báo hạn) hợp lệ; khác zero thì phải trong (now + 1 phút, now + 7 ngày] tính từ lúc gọi, `Location()` là UTC (chỉ lượt thẳng; gRPC luôn chở UTC), và (`Partner` cài `ExpiryReporter`) lệch dưới 1 giây so với hạn đối tác giả đã đặt. Không cài `ExpiryReporter` thì chỉ kiểm khoảng và luật vào `Skipped` (khi không có vi phạm) với lý do nêu `ExpiryReporter`. Create lỗi thì bỏ, xem `PAY-1`. | Core chỉ nhận hạn trong khoảng đó và bỏ hạn ngoài khoảng (phiên dùng hạn mặc định của core). Đọc giờ địa phương của đối tác như UTC thì hạn lệch hàng giờ mà vẫn trong khoảng: core cho phiên hết hạn khi khách còn đang trả, hoặc giữ đơn quá lâu. |
 | `QRY-1` | (có `query_payment`) giao dịch đối tác không biết → `Found == false`, không lỗi. | Core truy vấn cả giao dịch chưa tới được đối tác; báo lỗi thì không bao giờ đóng được giao dịch đó. |
 | `QRY-2` | Sau `SetPaymentStatus(succeeded, amount)` → `Found`, `Status == succeeded`, `AmountPaid` bằng số đã đặt hoặc 0; `Currency` rỗng hoặc ba chữ hoa. | Khách đã trả mà đơn không được xác nhận, hoặc giao dịch rơi vào lệch tiền. |
 | `QRY-3` | (có `query_payment`) `ModeHang` → như `PAY-4`. | Như `PAY-4`. |
@@ -115,6 +116,10 @@ thì `LOG-1` không bắt được connector quên che. Che bằng `providerhttp
 - Tuỳ chọn `conformance.RequestRecorder` (`OrderCodes() []string`): mã đơn (mã giao dịch phía đối tác, đúng như
   connector đặt trong request) của mọi lệnh tạo thanh toán đối tác giả đã NHẬN, theo thứ tự nhận. Nên cài: không
   cài thì `ID-4` bị bỏ.
+- Tuỳ chọn `conformance.ExpiryReporter` (`PaymentExpiry(transactionCode) (time.Time, bool)`): hạn phiên đối tác
+  giả đã đặt vào phản hồi tạo của giao dịch. Nên cài, và cho đối tác giả ghi hạn theo đúng định dạng/múi giờ của
+  đối tác thật (ví dụ có offset `+07:00` như `acmetest`): không cài thì `PAY-8` chỉ kiểm khoảng, không bắt được
+  connector đọc sai múi giờ, và luật vào `Skipped`.
 - Tuỳ chọn `conformance.RequestCounter` (`BusinessRequests() int`): số request nghiệp vụ (không tính lấy
   token) đối tác giả đã nhận từ lúc tạo. Đếm ngay khi NHẬN request, trước khi treo hay trả lời, trên MỌI
   đường nghiệp vụ (tạo, truy vấn, huỷ, hoàn…); `ModeDown` không tính. Nên

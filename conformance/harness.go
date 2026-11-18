@@ -62,6 +62,13 @@ type RequestRecorder interface {
 	OrderCodes() []string
 }
 
+// ExpiryReporter là phần tuỳ chọn của Partner: hạn phiên thanh toán mà đối tác giả đã đặt vào phản hồi tạo thanh
+// toán của giao dịch (ok sai nếu chưa đặt). Partner cài nó thì PAY-8 so ExpiresAt connector trả với đúng hạn này
+// (bắt đọc sai múi giờ); không cài thì PAY-8 chỉ kiểm khoảng và lượt so vào Skipped.
+type ExpiryReporter interface {
+	PaymentExpiry(transactionCode string) (time.Time, bool)
+}
+
 // Harness mô tả connector cần kiểm.
 type Harness struct {
 	New    func(tb testing.TB) (connector.Connector, Partner) // mỗi kiểm tra một cặp mới

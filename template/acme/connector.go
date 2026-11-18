@@ -92,7 +92,23 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 	if err != nil {
 		return connector.CreatePaymentResult{Raw: raw}, badBody(err)
 	}
-	return connector.CreatePaymentResult{ProviderRef: w.PaymentID, Status: st, NextAction: na, ExpiresAt: expires, Raw: raw}, nil
+	return connector.CreatePaymentResult{ProviderRef: w.PaymentID, Status: st, NextAction: na, ExpiresAt: sessionExpiry(expires, time.Now()),
+		Raw: raw}, nil
+}
+
+// Khoảng core nhận hạn phiên (connector.CreatePaymentResult.ExpiresAt): (now + 1 phút, now + 7 ngày].
+const (
+	minSessionAhead = time.Minute
+	maxSessionAhead = 7 * 24 * time.Hour
+)
+
+// sessionExpiry đổi expires_at của acme (có offset, ví dụ +07:00) về UTC. Ngoài khoảng core nhận thì trả zero
+// ("không báo"): không tự chế hạn, core dùng hạn mặc định của nó (luật PAY-8).
+func sessionExpiry(t, now time.Time) time.Time {
+	if t.IsZero() || !t.After(now.Add(minSessionAhead)) || t.After(now.Add(maxSessionAhead)) {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // QueryPayment tra theo mã đơn dựng lại từ TransactionCode + CreatedAt (đúng mã đã gửi lúc tạo, kể cả khi lệnh
