@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
@@ -71,7 +72,7 @@ func TestRoundTrip_AllNineOperations(t *testing.T) {
 
 	creq := connector.CreatePaymentRequest{TransactionCode: "T1", IdempotencyKey: "k1", Money: money,
 		Method: paykit.MethodQR, Customer: cust, ReturnURL: "https://r", CancelURL: "https://c", ClientIP: "1.2.3.4",
-		Metadata: map[string]string{"m": "n"}}
+		Metadata: map[string]string{"m": "n"}, CreatedAt: tCreated}
 	cres, err := c.CreatePayment(ctx, creq)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +88,8 @@ func TestRoundTrip_AllNineOperations(t *testing.T) {
 	}
 
 	chreq := connector.ChargeRequest{TransactionCode: "T1", IdempotencyKey: "k2", Money: money, Method: paykit.MethodVisa,
-		Customer: cust, ReturnURL: "r", CancelURL: "c", ClientIP: "ip", Metadata: map[string]string{"x": "y"}}
+		Customer: cust, ReturnURL: "r", CancelURL: "c", ClientIP: "ip", Metadata: map[string]string{"x": "y"},
+		CreatedAt: tCreated}
 	chres, err := c.Charge(ctx, chreq)
 	if err != nil || !reflect.DeepEqual(gotCharge, chreq) {
 		t.Fatalf("charge req: %+v err=%v", gotCharge, err)
@@ -98,7 +100,7 @@ func TestRoundTrip_AllNineOperations(t *testing.T) {
 		t.Errorf("charge res: %+v", chres)
 	}
 
-	qreq := connector.QueryPaymentRequest{TransactionCode: "T1", ProviderRef: "pr1"}
+	qreq := connector.QueryPaymentRequest{TransactionCode: "T1", ProviderRef: "pr1", CreatedAt: tCreated}
 	qres, err := c.QueryPayment(ctx, qreq)
 	if err != nil || gotQuery != qreq {
 		t.Fatalf("query req: %+v err=%v", gotQuery, err)
@@ -110,20 +112,22 @@ func TestRoundTrip_AllNineOperations(t *testing.T) {
 		t.Errorf("query res: %+v", qres)
 	}
 
-	cnreq := connector.CancelRequest{TransactionCode: "T1", ProviderRef: "pr1", IdempotencyKey: "k3"}
+	cnreq := connector.CancelRequest{TransactionCode: "T1", ProviderRef: "pr1", IdempotencyKey: "k3", CreatedAt: tCreated}
 	cnres, err := c.CancelPayment(ctx, cnreq)
 	if err != nil || gotCancel != cnreq || cnres.Status != connector.StatusCanceled || cnres.Raw != raw {
 		t.Fatalf("cancel: req=%+v res=%+v err=%v", gotCancel, cnres, err)
 	}
 
 	rreq := connector.RefundRequest{RefundCode: "R1", IdempotencyKey: "k4", TransactionCode: "T1", ProviderRef: "pr1",
-		Money: paykit.Money{Amount: 10, Currency: "VND"}, Reason: "why", CustomerID: "c1"}
+		Money: paykit.Money{Amount: 10, Currency: "VND"}, Reason: "why", CustomerID: "c1",
+		TransactionCreatedAt: tCreated, CreatedAt: tCreated.Add(time.Minute)}
 	rres, err := c.CreateRefund(ctx, rreq)
 	if err != nil || gotRefund != rreq || rres.ProviderRef != "rf1" || rres.Status != connector.StatusPending || rres.Raw != raw {
 		t.Fatalf("refund: req=%+v res=%+v err=%v", gotRefund, rres, err)
 	}
 
-	qrreq := connector.QueryRefundRequest{RefundCode: "R1", ProviderRef: "rf1", TransactionCode: "T1"}
+	qrreq := connector.QueryRefundRequest{RefundCode: "R1", ProviderRef: "rf1", TransactionCode: "T1",
+		CreatedAt: tCreated.Add(time.Minute), TransactionCreatedAt: tCreated}
 	qrres, err := c.QueryRefund(ctx, qrreq)
 	wantQR := connector.RefundStatus{Found: true, Status: connector.StatusSucceeded, ProviderRef: "rf1",
 		ProviderCode: "00", ProviderMessage: "done", Raw: raw}

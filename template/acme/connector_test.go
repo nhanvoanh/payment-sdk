@@ -518,3 +518,64 @@ func TestAcme_SendsCustomerAddress(t *testing.T) {
 		}
 	}
 }
+
+// Mã đơn gửi acme là yymmdd_<mã giao dịch>, ngày lấy từ CreatedAt (core cấp, UTC) đổi sang múi giờ cấu hình
+// (mặc định UTC), KHÔNG từ đồng hồ lúc gọi: truy vấn sau này dựng lại đúng mã, kể cả qua nửa đêm.
+func TestAcme_OrderCodeFromCreatedAt(t *testing.T) {
+	created := time.Date(2026, 11, 18, 23, 59, 59, 999999000, time.UTC) // đã là 19/11 ở UTC+7
+	for _, tc := range []struct {
+		loc  *time.Location
+		want string
+	}{{nil, "261118_TXDATE1"}, {time.FixedZone("UTC+7", 7*3600), "261119_TXDATE1"}} {
+		p := acmetest.NewPartner(t)
+		c, err := acme.New(acme.Config{BaseURL: p.URL(), MerchantID: p.MerchantID(), SecretKey: p.Secret(), Location: tc.loc})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := createReq("TXDATE1")
+		req.CreatedAt = created
+		ctx := context.Background()
+		if _, err := c.CreatePayment(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+		if got := p.OrderCodes(); !slices.Equal(got, []string{tc.want}) {
+			t.Fatalf("loc=%v: acme nhận mã %v, cần [%s]", tc.loc, got, tc.want)
+		}
+		// Cùng CreatedAt thì tìm lại được; CreatedAt khác ngày (như khi lấy đồng hồ lúc gọi) thì acme không thấy.
+		st, err := c.QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "TXDATE1", CreatedAt: created})
+		if err != nil || !st.Found {
+			t.Errorf("loc=%v: truy vấn cùng CreatedAt: found=%v err=%v, cần thấy", tc.loc, st.Found, err)
+		}
+		st, err = c.QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: "TXDATE1", CreatedAt: created.Add(48 * time.Hour)})
+		if err != nil || st.Found {
+			t.Errorf("loc=%v: truy vấn khác ngày: found=%v err=%v, cần không thấy", tc.loc, st.Found, err)
+		}
+		// Webhook mang mã đơn của acme; connector trả lại mã giao dịch của core.
+		ev, err := c.ParseWebhook(ctx, p.SignedWebhook("TXDATE1", "ref", connector.StatusSucceeded, amount))
+		if err != nil || ev.TransactionCode != "TXDATE1" {
+			t.Errorf("loc=%v: webhook: tx=%q err=%v, cần TXDATE1", tc.loc, ev.TransactionCode, err)
+		}
+	}
+}
+
+func TestConfigFromEnv_Timezone(t *testing.T) {
+	base := map[string]string{"ACME_BASE_URL": "https://a.example", "ACME_MERCHANT_ID": "M", "ACME_SECRET_KEY": "s"}
+	env := func(extra string) func(string) string {
+		return func(k string) string {
+			if k == "ACME_TIMEZONE" {
+				return extra
+			}
+			return base[k]
+		}
+	}
+	cfg, err := acme.ConfigFromEnv(env("Asia/Ho_Chi_Minh"))
+	if err != nil || cfg.Location == nil || cfg.Location.String() != "Asia/Ho_Chi_Minh" {
+		t.Fatalf("cfg.Location = %v err = %v, cần Asia/Ho_Chi_Minh", cfg.Location, err)
+	}
+	if cfg, err := acme.ConfigFromEnv(env("")); err != nil || cfg.Location != nil {
+		t.Errorf("không đặt ACME_TIMEZONE: Location = %v err = %v, cần nil (UTC)", cfg.Location, err)
+	}
+	if _, err := acme.ConfigFromEnv(env("Sao/Hoa")); err == nil || !strings.Contains(err.Error(), "ACME_TIMEZONE") {
+		t.Errorf("ACME_TIMEZONE sai: err = %v, cần nêu tên biến", err)
+	}
+}

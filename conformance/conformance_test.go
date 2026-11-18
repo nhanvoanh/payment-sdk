@@ -27,7 +27,8 @@ import (
 type fakePartner struct {
 	mu      sync.Mutex
 	mode    conformance.Mode
-	reqs    int // request nghiệp vụ đã nhận (conformance.RequestCounter)
+	reqs    int      // request nghiệp vụ đã nhận (conformance.RequestCounter)
+	orders  []string // mã đơn của các lệnh tạo đã nhận (conformance.RequestRecorder)
 	pays    map[string]paid
 	release chan struct{} // đóng khi test xong, để goroutine của connector treo được giải phóng
 }
@@ -80,6 +81,23 @@ func (p *fakePartner) lookup(tx string) (paid, bool) {
 	defer p.mu.Unlock()
 	v, ok := p.pays[tx]
 	return v, ok
+}
+
+func (p *fakePartner) OrderCodes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.orders...)
+}
+
+func (p *fakePartner) recordOrder(code string) {
+	p.mu.Lock()
+	p.orders = append(p.orders, code)
+	p.mu.Unlock()
+}
+
+// orderCode là mã đơn phía đối tác của connector viết đúng: ngày tạo (từ CreatedAt) + mã giao dịch.
+func orderCode(req connector.CreatePaymentRequest) string {
+	return req.CreatedAt.UTC().Format("060102") + "_" + req.TransactionCode
 }
 
 func (p *fakePartner) BusinessRequests() int {
@@ -138,6 +156,7 @@ func newGood(tb testing.TB) (*connectortest.Fake, *fakePartner) {
 		if err := p.call(ctx); err != nil {
 			return connector.CreatePaymentResult{}, err
 		}
+		p.recordOrder(orderCode(req))
 		return connector.CreatePaymentResult{
 			ProviderRef: "acme_" + req.TransactionCode,
 			Status:      connector.StatusPending,
@@ -965,12 +984,13 @@ func TestCheck_CancelWithoutRefOnHang_SkippedWithoutCounter(t *testing.T) {
 			t.Errorf("thiếu %s trong Skipped với lý do nêu RequestCounter: %v", code, r.Skipped)
 		}
 	}
-	if len(r.Skipped) != 2 {
-		t.Errorf("chỉ lượt thêm của CXL-2 bị bỏ: %v", r.Skipped)
+	others := slices.DeleteFunc(slices.Clone(r.Skipped), func(s string) bool { return strings.HasPrefix(s, "ID-4") })
+	if len(others) != 2 {
+		t.Errorf("ngoài ID-4 (thiếu RequestRecorder), chỉ lượt thêm của CXL-2 bị bỏ: %v", r.Skipped)
 	}
 }
 
-// plainPartner giấu mọi interface tuỳ chọn của đối tác giả (RequestCounter).
+// plainPartner giấu mọi interface tuỳ chọn của đối tác giả (RequestCounter, RequestRecorder).
 type plainPartner struct{ conformance.Partner }
 
 // Các câu trả lời dứt khoát đều qua CXL-3.
@@ -1369,5 +1389,64 @@ func TestCheck_RedactedRawPasses(t *testing.T) {
 	}))
 	if len(r.Findings) != 0 {
 		t.Fatalf("connector đã che không được có finding:%s", dump(r))
+	}
+}
+
+// Mã đơn phía đối tác dựng từ đồng hồ lúc gọi (giờ:phút:giây) thay vì CreatedAt: ID-4 bắt, cả qua gRPC.
+func TestCheck_Catches_OrderCodeFromWallClock(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			if err := p.call(ctx); err != nil {
+				return connector.CreatePaymentResult{}, err
+			}
+			p.recordOrder(time.Now().Format("060102150405") + "_" + req.TransactionCode)
+			return connector.CreatePaymentResult{ProviderRef: "acme_" + req.TransactionCode, Status: connector.StatusPending,
+				NextAction: paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.acme.example/x"}}, nil
+		}
+		return f
+	}))
+	expectBoth(t, r, "ID-4")
+}
+
+// Ngày trong mã lấy từ đồng hồ (hôm nay) chứ không từ CreatedAt: hai lần gọi cùng ngày giống nhau, nhưng ID-4
+// vẫn bắt vì mã mang ngày hôm nay trong khi CreatedAt ở ngày khác.
+func TestCheck_Catches_OrderCodeWithTodaysDate(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+			if err := p.call(ctx); err != nil {
+				return connector.CreatePaymentResult{}, err
+			}
+			p.recordOrder(time.Now().UTC().Format("060102") + "_" + req.TransactionCode)
+			return connector.CreatePaymentResult{ProviderRef: "acme_" + req.TransactionCode, Status: connector.StatusPending,
+				NextAction: paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.acme.example/x"}}, nil
+		}
+		return f
+	}))
+	expectBoth(t, r, "ID-4")
+}
+
+// noRecorder giấu RequestRecorder của đối tác giả.
+type noRecorder struct{ *fakePartner }
+
+func (noRecorder) OrderCodes() {}
+
+// Đối tác giả không cài RequestRecorder: ID-4 vào Skipped kèm lý do, không phải vi phạm.
+func TestCheck_ID4_SkippedWithoutRecorder(t *testing.T) {
+	t.Parallel()
+	h := harness(nil)
+	h.New = func(tb testing.TB) (connector.Connector, conformance.Partner) {
+		f, p := newGood(tb)
+		return f, noRecorder{p}
+	}
+	r := conformance.Check(t, h)
+	if len(r.Findings) != 0 {
+		t.Fatalf("không được có finding:%s", dump(r))
+	}
+	for _, code := range []string{"ID-4", "ID-4/grpc"} {
+		if !slices.Contains(r.Skipped, code+": đối tác giả không cài conformance.RequestRecorder") {
+			t.Errorf("thiếu %s trong Skipped: %v", code, r.Skipped)
+		}
 	}
 }

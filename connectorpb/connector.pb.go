@@ -851,8 +851,10 @@ type CreatePaymentRequest struct {
 	CancelUrl       string                 `protobuf:"bytes,7,opt,name=cancel_url,json=cancelUrl,proto3" json:"cancel_url,omitempty"`
 	ClientIp        string                 `protobuf:"bytes,8,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,9,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Thời điểm tạo giao dịch đã lưu (UTC, micro giây); giống nhau ở mọi lần gọi lại. Thêm sau.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreatePaymentRequest) Reset() {
@@ -944,6 +946,13 @@ func (x *CreatePaymentRequest) GetClientIp() string {
 func (x *CreatePaymentRequest) GetMetadata() map[string]string {
 	if x != nil {
 		return x.Metadata
+	}
+	return nil
+}
+
+func (x *CreatePaymentRequest) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
 	}
 	return nil
 }
@@ -1043,8 +1052,10 @@ type ChargeRequest struct {
 	CancelUrl       string                 `protobuf:"bytes,7,opt,name=cancel_url,json=cancelUrl,proto3" json:"cancel_url,omitempty"`
 	ClientIp        string                 `protobuf:"bytes,8,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,9,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Thời điểm tạo giao dịch đã lưu. Thêm sau.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ChargeRequest) Reset() {
@@ -1136,6 +1147,13 @@ func (x *ChargeRequest) GetClientIp() string {
 func (x *ChargeRequest) GetMetadata() map[string]string {
 	if x != nil {
 		return x.Metadata
+	}
+	return nil
+}
+
+func (x *ChargeRequest) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
 	}
 	return nil
 }
@@ -1236,8 +1254,10 @@ type QueryPaymentRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	TransactionCode string                 `protobuf:"bytes,1,opt,name=transaction_code,json=transactionCode,proto3" json:"transaction_code,omitempty"`
 	ProviderRef     string                 `protobuf:"bytes,2,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Thời điểm tạo giao dịch, đúng giá trị đã gửi lúc tạo. Thêm sau.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *QueryPaymentRequest) Reset() {
@@ -1282,6 +1302,13 @@ func (x *QueryPaymentRequest) GetProviderRef() string {
 		return x.ProviderRef
 	}
 	return ""
+}
+
+func (x *QueryPaymentRequest) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
 }
 
 // found=false: đối tác không biết giao dịch này; khi đó status không được xét.
@@ -1406,8 +1433,10 @@ type CancelPaymentRequest struct {
 	TransactionCode string                 `protobuf:"bytes,1,opt,name=transaction_code,json=transactionCode,proto3" json:"transaction_code,omitempty"`
 	ProviderRef     string                 `protobuf:"bytes,2,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
 	IdempotencyKey  string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Thời điểm tạo giao dịch, đúng giá trị đã gửi lúc tạo. Thêm sau.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CancelPaymentRequest) Reset() {
@@ -1459,6 +1488,13 @@ func (x *CancelPaymentRequest) GetIdempotencyKey() string {
 		return x.IdempotencyKey
 	}
 	return ""
+}
+
+func (x *CancelPaymentRequest) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
 }
 
 type CancelPaymentResponse struct {
@@ -1530,8 +1566,11 @@ type CreateRefundRequest struct {
 	Money           *Money                 `protobuf:"bytes,5,opt,name=money,proto3" json:"money,omitempty"`
 	Reason          string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
 	CustomerId      string                 `protobuf:"bytes,7,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Thời điểm tạo giao dịch gốc và của lệnh hoàn, đã lưu. Thêm sau.
+	TransactionCreatedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=transaction_created_at,json=transactionCreatedAt,proto3" json:"transaction_created_at,omitempty"`
+	CreatedAt            *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *CreateRefundRequest) Reset() {
@@ -1613,6 +1652,20 @@ func (x *CreateRefundRequest) GetCustomerId() string {
 	return ""
 }
 
+func (x *CreateRefundRequest) GetTransactionCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.TransactionCreatedAt
+	}
+	return nil
+}
+
+func (x *CreateRefundRequest) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
 type CreateRefundResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Error         *ConnectorError        `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
@@ -1686,8 +1739,11 @@ type QueryRefundRequest struct {
 	RefundCode      string                 `protobuf:"bytes,1,opt,name=refund_code,json=refundCode,proto3" json:"refund_code,omitempty"`
 	ProviderRef     string                 `protobuf:"bytes,2,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
 	TransactionCode string                 `protobuf:"bytes,3,opt,name=transaction_code,json=transactionCode,proto3" json:"transaction_code,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Thời điểm tạo lệnh hoàn và của giao dịch gốc, đúng giá trị đã gửi ở CreateRefund. Thêm sau.
+	CreatedAt            *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	TransactionCreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=transaction_created_at,json=transactionCreatedAt,proto3" json:"transaction_created_at,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *QueryRefundRequest) Reset() {
@@ -1739,6 +1795,20 @@ func (x *QueryRefundRequest) GetTransactionCode() string {
 		return x.TransactionCode
 	}
 	return ""
+}
+
+func (x *QueryRefundRequest) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *QueryRefundRequest) GetTransactionCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.TransactionCreatedAt
+	}
+	return nil
 }
 
 type QueryRefundResponse struct {
@@ -2239,7 +2309,7 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\fwebhook_acks\x18\x05 \x03(\v2>.hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntryR\vwebhookAcks\x1ag\n" +
 	"\x10WebhookAcksEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12=\n" +
-	"\x05value\x18\x02 \x01(\v2'.hasaki.payment.connector.v1.WebhookAckR\x05value:\x028\x01\"\xf4\x03\n" +
+	"\x05value\x18\x02 \x01(\v2'.hasaki.payment.connector.v1.WebhookAckR\x05value:\x028\x01\"\xaf\x04\n" +
 	"\x14CreatePaymentRequest\x12)\n" +
 	"\x10transaction_code\x18\x01 \x01(\tR\x0ftransactionCode\x12'\n" +
 	"\x0fidempotency_key\x18\x02 \x01(\tR\x0eidempotencyKey\x128\n" +
@@ -2251,7 +2321,10 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\n" +
 	"cancel_url\x18\a \x01(\tR\tcancelUrl\x12\x1b\n" +
 	"\tclient_ip\x18\b \x01(\tR\bclientIp\x12[\n" +
-	"\bmetadata\x18\t \x03(\v2?.hasaki.payment.connector.v1.CreatePaymentRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\t \x03(\v2?.hasaki.payment.connector.v1.CreatePaymentRequest.MetadataEntryR\bmetadata\x129\n" +
+	"\n" +
+	"created_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfb\x02\n" +
@@ -2263,7 +2336,7 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\vnext_action\x18\x05 \x01(\v2'.hasaki.payment.connector.v1.NextActionR\n" +
 	"nextAction\x129\n" +
 	"\n" +
-	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xe6\x03\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xa1\x04\n" +
 	"\rChargeRequest\x12)\n" +
 	"\x10transaction_code\x18\x01 \x01(\tR\x0ftransactionCode\x12'\n" +
 	"\x0fidempotency_key\x18\x02 \x01(\tR\x0eidempotencyKey\x128\n" +
@@ -2275,7 +2348,10 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\n" +
 	"cancel_url\x18\a \x01(\tR\tcancelUrl\x12\x1b\n" +
 	"\tclient_ip\x18\b \x01(\tR\bclientIp\x12T\n" +
-	"\bmetadata\x18\t \x03(\v28.hasaki.payment.connector.v1.ChargeRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\t \x03(\v28.hasaki.payment.connector.v1.ChargeRequest.MetadataEntryR\bmetadata\x129\n" +
+	"\n" +
+	"created_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb3\x03\n" +
@@ -2288,10 +2364,12 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"amountPaid\x123\n" +
 	"\apaid_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x06paidAt\x12H\n" +
 	"\vnext_action\x18\a \x01(\v2'.hasaki.payment.connector.v1.NextActionR\n" +
-	"nextAction\"c\n" +
+	"nextAction\"\x9e\x01\n" +
 	"\x13QueryPaymentRequest\x12)\n" +
 	"\x10transaction_code\x18\x01 \x01(\tR\x0ftransactionCode\x12!\n" +
-	"\fprovider_ref\x18\x02 \x01(\tR\vproviderRef\"\x92\x04\n" +
+	"\fprovider_ref\x18\x02 \x01(\tR\vproviderRef\x129\n" +
+	"\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x92\x04\n" +
 	"\x14QueryPaymentResponse\x12A\n" +
 	"\x05error\x18\x01 \x01(\v2+.hasaki.payment.connector.v1.ConnectorErrorR\x05error\x12:\n" +
 	"\x03raw\x18\x02 \x01(\v2(.hasaki.payment.connector.v1.RawExchangeR\x03raw\x12\x14\n" +
@@ -2304,15 +2382,17 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\x04card\x18\b \x01(\v2'.hasaki.payment.connector.v1.CardMaskedR\x04card\x12#\n" +
 	"\rprovider_code\x18\t \x01(\tR\fproviderCode\x12)\n" +
 	"\x10provider_message\x18\n" +
-	" \x01(\tR\x0fproviderMessage\"\x8d\x01\n" +
+	" \x01(\tR\x0fproviderMessage\"\xc8\x01\n" +
 	"\x14CancelPaymentRequest\x12)\n" +
 	"\x10transaction_code\x18\x01 \x01(\tR\x0ftransactionCode\x12!\n" +
 	"\fprovider_ref\x18\x02 \x01(\tR\vproviderRef\x12'\n" +
-	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\"\xd3\x01\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x129\n" +
+	"\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xd3\x01\n" +
 	"\x15CancelPaymentResponse\x12A\n" +
 	"\x05error\x18\x01 \x01(\v2+.hasaki.payment.connector.v1.ConnectorErrorR\x05error\x12:\n" +
 	"\x03raw\x18\x02 \x01(\v2(.hasaki.payment.connector.v1.RawExchangeR\x03raw\x12;\n" +
-	"\x06status\x18\x03 \x01(\x0e2#.hasaki.payment.connector.v1.StatusR\x06status\"\xa0\x02\n" +
+	"\x06status\x18\x03 \x01(\x0e2#.hasaki.payment.connector.v1.StatusR\x06status\"\xad\x03\n" +
 	"\x13CreateRefundRequest\x12\x1f\n" +
 	"\vrefund_code\x18\x01 \x01(\tR\n" +
 	"refundCode\x12'\n" +
@@ -2322,17 +2402,23 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\x05money\x18\x05 \x01(\v2\".hasaki.payment.connector.v1.MoneyR\x05money\x12\x16\n" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x1f\n" +
 	"\vcustomer_id\x18\a \x01(\tR\n" +
-	"customerId\"\xf5\x01\n" +
+	"customerId\x12P\n" +
+	"\x16transaction_created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\x14transactionCreatedAt\x129\n" +
+	"\n" +
+	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf5\x01\n" +
 	"\x14CreateRefundResponse\x12A\n" +
 	"\x05error\x18\x01 \x01(\v2+.hasaki.payment.connector.v1.ConnectorErrorR\x05error\x12:\n" +
 	"\x03raw\x18\x02 \x01(\v2(.hasaki.payment.connector.v1.RawExchangeR\x03raw\x12!\n" +
 	"\fprovider_ref\x18\x03 \x01(\tR\vproviderRef\x12;\n" +
-	"\x06status\x18\x04 \x01(\x0e2#.hasaki.payment.connector.v1.StatusR\x06status\"\x83\x01\n" +
+	"\x06status\x18\x04 \x01(\x0e2#.hasaki.payment.connector.v1.StatusR\x06status\"\x90\x02\n" +
 	"\x12QueryRefundRequest\x12\x1f\n" +
 	"\vrefund_code\x18\x01 \x01(\tR\n" +
 	"refundCode\x12!\n" +
 	"\fprovider_ref\x18\x02 \x01(\tR\vproviderRef\x12)\n" +
-	"\x10transaction_code\x18\x03 \x01(\tR\x0ftransactionCode\"\xda\x02\n" +
+	"\x10transaction_code\x18\x03 \x01(\tR\x0ftransactionCode\x129\n" +
+	"\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12P\n" +
+	"\x16transaction_created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x14transactionCreatedAt\"\xda\x02\n" +
 	"\x13QueryRefundResponse\x12A\n" +
 	"\x05error\x18\x01 \x01(\v2+.hasaki.payment.connector.v1.ConnectorErrorR\x05error\x12:\n" +
 	"\x03raw\x18\x02 \x01(\v2(.hasaki.payment.connector.v1.RawExchangeR\x03raw\x12\x14\n" +
@@ -2455,72 +2541,80 @@ var file_hasaki_payment_connector_v1_connector_proto_depIdxs = []int32{
 	3,  // 5: hasaki.payment.connector.v1.CreatePaymentRequest.money:type_name -> hasaki.payment.connector.v1.Money
 	4,  // 6: hasaki.payment.connector.v1.CreatePaymentRequest.customer:type_name -> hasaki.payment.connector.v1.Customer
 	32, // 7: hasaki.payment.connector.v1.CreatePaymentRequest.metadata:type_name -> hasaki.payment.connector.v1.CreatePaymentRequest.MetadataEntry
-	2,  // 8: hasaki.payment.connector.v1.CreatePaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 9: hasaki.payment.connector.v1.CreatePaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	0,  // 10: hasaki.payment.connector.v1.CreatePaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
-	6,  // 11: hasaki.payment.connector.v1.CreatePaymentResponse.next_action:type_name -> hasaki.payment.connector.v1.NextAction
-	34, // 12: hasaki.payment.connector.v1.CreatePaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
-	3,  // 13: hasaki.payment.connector.v1.ChargeRequest.money:type_name -> hasaki.payment.connector.v1.Money
-	4,  // 14: hasaki.payment.connector.v1.ChargeRequest.customer:type_name -> hasaki.payment.connector.v1.Customer
-	33, // 15: hasaki.payment.connector.v1.ChargeRequest.metadata:type_name -> hasaki.payment.connector.v1.ChargeRequest.MetadataEntry
-	2,  // 16: hasaki.payment.connector.v1.ChargeResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 17: hasaki.payment.connector.v1.ChargeResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	0,  // 18: hasaki.payment.connector.v1.ChargeResponse.status:type_name -> hasaki.payment.connector.v1.Status
-	3,  // 19: hasaki.payment.connector.v1.ChargeResponse.amount_paid:type_name -> hasaki.payment.connector.v1.Money
-	34, // 20: hasaki.payment.connector.v1.ChargeResponse.paid_at:type_name -> google.protobuf.Timestamp
-	6,  // 21: hasaki.payment.connector.v1.ChargeResponse.next_action:type_name -> hasaki.payment.connector.v1.NextAction
-	2,  // 22: hasaki.payment.connector.v1.QueryPaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 23: hasaki.payment.connector.v1.QueryPaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	0,  // 24: hasaki.payment.connector.v1.QueryPaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
-	3,  // 25: hasaki.payment.connector.v1.QueryPaymentResponse.amount_paid:type_name -> hasaki.payment.connector.v1.Money
-	34, // 26: hasaki.payment.connector.v1.QueryPaymentResponse.paid_at:type_name -> google.protobuf.Timestamp
-	5,  // 27: hasaki.payment.connector.v1.QueryPaymentResponse.card:type_name -> hasaki.payment.connector.v1.CardMasked
-	2,  // 28: hasaki.payment.connector.v1.CancelPaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 29: hasaki.payment.connector.v1.CancelPaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	0,  // 30: hasaki.payment.connector.v1.CancelPaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
-	3,  // 31: hasaki.payment.connector.v1.CreateRefundRequest.money:type_name -> hasaki.payment.connector.v1.Money
-	2,  // 32: hasaki.payment.connector.v1.CreateRefundResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 33: hasaki.payment.connector.v1.CreateRefundResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	0,  // 34: hasaki.payment.connector.v1.CreateRefundResponse.status:type_name -> hasaki.payment.connector.v1.Status
-	2,  // 35: hasaki.payment.connector.v1.QueryRefundResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 36: hasaki.payment.connector.v1.QueryRefundResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	0,  // 37: hasaki.payment.connector.v1.QueryRefundResponse.status:type_name -> hasaki.payment.connector.v1.Status
-	0,  // 38: hasaki.payment.connector.v1.ProviderEvent.status:type_name -> hasaki.payment.connector.v1.Status
-	3,  // 39: hasaki.payment.connector.v1.ProviderEvent.amount_paid:type_name -> hasaki.payment.connector.v1.Money
-	34, // 40: hasaki.payment.connector.v1.ProviderEvent.paid_at:type_name -> google.protobuf.Timestamp
-	5,  // 41: hasaki.payment.connector.v1.ProviderEvent.card:type_name -> hasaki.payment.connector.v1.CardMasked
-	9,  // 42: hasaki.payment.connector.v1.ParseWebhookRequest.raw:type_name -> hasaki.payment.connector.v1.RawWebhook
-	2,  // 43: hasaki.payment.connector.v1.ParseWebhookResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 44: hasaki.payment.connector.v1.ParseWebhookResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	25, // 45: hasaki.payment.connector.v1.ParseWebhookResponse.event:type_name -> hasaki.payment.connector.v1.ProviderEvent
-	9,  // 46: hasaki.payment.connector.v1.ParseRedirectRequest.raw:type_name -> hasaki.payment.connector.v1.RawWebhook
-	2,  // 47: hasaki.payment.connector.v1.ParseRedirectResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
-	7,  // 48: hasaki.payment.connector.v1.ParseRedirectResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
-	25, // 49: hasaki.payment.connector.v1.ParseRedirectResponse.event:type_name -> hasaki.payment.connector.v1.ProviderEvent
-	10, // 50: hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry.value:type_name -> hasaki.payment.connector.v1.WebhookAck
-	11, // 51: hasaki.payment.connector.v1.ConnectorService.Describe:input_type -> hasaki.payment.connector.v1.DescribeRequest
-	13, // 52: hasaki.payment.connector.v1.ConnectorService.CreatePayment:input_type -> hasaki.payment.connector.v1.CreatePaymentRequest
-	15, // 53: hasaki.payment.connector.v1.ConnectorService.Charge:input_type -> hasaki.payment.connector.v1.ChargeRequest
-	17, // 54: hasaki.payment.connector.v1.ConnectorService.QueryPayment:input_type -> hasaki.payment.connector.v1.QueryPaymentRequest
-	19, // 55: hasaki.payment.connector.v1.ConnectorService.CancelPayment:input_type -> hasaki.payment.connector.v1.CancelPaymentRequest
-	21, // 56: hasaki.payment.connector.v1.ConnectorService.CreateRefund:input_type -> hasaki.payment.connector.v1.CreateRefundRequest
-	23, // 57: hasaki.payment.connector.v1.ConnectorService.QueryRefund:input_type -> hasaki.payment.connector.v1.QueryRefundRequest
-	26, // 58: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:input_type -> hasaki.payment.connector.v1.ParseWebhookRequest
-	28, // 59: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:input_type -> hasaki.payment.connector.v1.ParseRedirectRequest
-	12, // 60: hasaki.payment.connector.v1.ConnectorService.Describe:output_type -> hasaki.payment.connector.v1.DescribeResponse
-	14, // 61: hasaki.payment.connector.v1.ConnectorService.CreatePayment:output_type -> hasaki.payment.connector.v1.CreatePaymentResponse
-	16, // 62: hasaki.payment.connector.v1.ConnectorService.Charge:output_type -> hasaki.payment.connector.v1.ChargeResponse
-	18, // 63: hasaki.payment.connector.v1.ConnectorService.QueryPayment:output_type -> hasaki.payment.connector.v1.QueryPaymentResponse
-	20, // 64: hasaki.payment.connector.v1.ConnectorService.CancelPayment:output_type -> hasaki.payment.connector.v1.CancelPaymentResponse
-	22, // 65: hasaki.payment.connector.v1.ConnectorService.CreateRefund:output_type -> hasaki.payment.connector.v1.CreateRefundResponse
-	24, // 66: hasaki.payment.connector.v1.ConnectorService.QueryRefund:output_type -> hasaki.payment.connector.v1.QueryRefundResponse
-	27, // 67: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:output_type -> hasaki.payment.connector.v1.ParseWebhookResponse
-	29, // 68: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:output_type -> hasaki.payment.connector.v1.ParseRedirectResponse
-	60, // [60:69] is the sub-list for method output_type
-	51, // [51:60] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	34, // 8: hasaki.payment.connector.v1.CreatePaymentRequest.created_at:type_name -> google.protobuf.Timestamp
+	2,  // 9: hasaki.payment.connector.v1.CreatePaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 10: hasaki.payment.connector.v1.CreatePaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	0,  // 11: hasaki.payment.connector.v1.CreatePaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
+	6,  // 12: hasaki.payment.connector.v1.CreatePaymentResponse.next_action:type_name -> hasaki.payment.connector.v1.NextAction
+	34, // 13: hasaki.payment.connector.v1.CreatePaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
+	3,  // 14: hasaki.payment.connector.v1.ChargeRequest.money:type_name -> hasaki.payment.connector.v1.Money
+	4,  // 15: hasaki.payment.connector.v1.ChargeRequest.customer:type_name -> hasaki.payment.connector.v1.Customer
+	33, // 16: hasaki.payment.connector.v1.ChargeRequest.metadata:type_name -> hasaki.payment.connector.v1.ChargeRequest.MetadataEntry
+	34, // 17: hasaki.payment.connector.v1.ChargeRequest.created_at:type_name -> google.protobuf.Timestamp
+	2,  // 18: hasaki.payment.connector.v1.ChargeResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 19: hasaki.payment.connector.v1.ChargeResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	0,  // 20: hasaki.payment.connector.v1.ChargeResponse.status:type_name -> hasaki.payment.connector.v1.Status
+	3,  // 21: hasaki.payment.connector.v1.ChargeResponse.amount_paid:type_name -> hasaki.payment.connector.v1.Money
+	34, // 22: hasaki.payment.connector.v1.ChargeResponse.paid_at:type_name -> google.protobuf.Timestamp
+	6,  // 23: hasaki.payment.connector.v1.ChargeResponse.next_action:type_name -> hasaki.payment.connector.v1.NextAction
+	34, // 24: hasaki.payment.connector.v1.QueryPaymentRequest.created_at:type_name -> google.protobuf.Timestamp
+	2,  // 25: hasaki.payment.connector.v1.QueryPaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 26: hasaki.payment.connector.v1.QueryPaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	0,  // 27: hasaki.payment.connector.v1.QueryPaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
+	3,  // 28: hasaki.payment.connector.v1.QueryPaymentResponse.amount_paid:type_name -> hasaki.payment.connector.v1.Money
+	34, // 29: hasaki.payment.connector.v1.QueryPaymentResponse.paid_at:type_name -> google.protobuf.Timestamp
+	5,  // 30: hasaki.payment.connector.v1.QueryPaymentResponse.card:type_name -> hasaki.payment.connector.v1.CardMasked
+	34, // 31: hasaki.payment.connector.v1.CancelPaymentRequest.created_at:type_name -> google.protobuf.Timestamp
+	2,  // 32: hasaki.payment.connector.v1.CancelPaymentResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 33: hasaki.payment.connector.v1.CancelPaymentResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	0,  // 34: hasaki.payment.connector.v1.CancelPaymentResponse.status:type_name -> hasaki.payment.connector.v1.Status
+	3,  // 35: hasaki.payment.connector.v1.CreateRefundRequest.money:type_name -> hasaki.payment.connector.v1.Money
+	34, // 36: hasaki.payment.connector.v1.CreateRefundRequest.transaction_created_at:type_name -> google.protobuf.Timestamp
+	34, // 37: hasaki.payment.connector.v1.CreateRefundRequest.created_at:type_name -> google.protobuf.Timestamp
+	2,  // 38: hasaki.payment.connector.v1.CreateRefundResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 39: hasaki.payment.connector.v1.CreateRefundResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	0,  // 40: hasaki.payment.connector.v1.CreateRefundResponse.status:type_name -> hasaki.payment.connector.v1.Status
+	34, // 41: hasaki.payment.connector.v1.QueryRefundRequest.created_at:type_name -> google.protobuf.Timestamp
+	34, // 42: hasaki.payment.connector.v1.QueryRefundRequest.transaction_created_at:type_name -> google.protobuf.Timestamp
+	2,  // 43: hasaki.payment.connector.v1.QueryRefundResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 44: hasaki.payment.connector.v1.QueryRefundResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	0,  // 45: hasaki.payment.connector.v1.QueryRefundResponse.status:type_name -> hasaki.payment.connector.v1.Status
+	0,  // 46: hasaki.payment.connector.v1.ProviderEvent.status:type_name -> hasaki.payment.connector.v1.Status
+	3,  // 47: hasaki.payment.connector.v1.ProviderEvent.amount_paid:type_name -> hasaki.payment.connector.v1.Money
+	34, // 48: hasaki.payment.connector.v1.ProviderEvent.paid_at:type_name -> google.protobuf.Timestamp
+	5,  // 49: hasaki.payment.connector.v1.ProviderEvent.card:type_name -> hasaki.payment.connector.v1.CardMasked
+	9,  // 50: hasaki.payment.connector.v1.ParseWebhookRequest.raw:type_name -> hasaki.payment.connector.v1.RawWebhook
+	2,  // 51: hasaki.payment.connector.v1.ParseWebhookResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 52: hasaki.payment.connector.v1.ParseWebhookResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	25, // 53: hasaki.payment.connector.v1.ParseWebhookResponse.event:type_name -> hasaki.payment.connector.v1.ProviderEvent
+	9,  // 54: hasaki.payment.connector.v1.ParseRedirectRequest.raw:type_name -> hasaki.payment.connector.v1.RawWebhook
+	2,  // 55: hasaki.payment.connector.v1.ParseRedirectResponse.error:type_name -> hasaki.payment.connector.v1.ConnectorError
+	7,  // 56: hasaki.payment.connector.v1.ParseRedirectResponse.raw:type_name -> hasaki.payment.connector.v1.RawExchange
+	25, // 57: hasaki.payment.connector.v1.ParseRedirectResponse.event:type_name -> hasaki.payment.connector.v1.ProviderEvent
+	10, // 58: hasaki.payment.connector.v1.DescribeResponse.WebhookAcksEntry.value:type_name -> hasaki.payment.connector.v1.WebhookAck
+	11, // 59: hasaki.payment.connector.v1.ConnectorService.Describe:input_type -> hasaki.payment.connector.v1.DescribeRequest
+	13, // 60: hasaki.payment.connector.v1.ConnectorService.CreatePayment:input_type -> hasaki.payment.connector.v1.CreatePaymentRequest
+	15, // 61: hasaki.payment.connector.v1.ConnectorService.Charge:input_type -> hasaki.payment.connector.v1.ChargeRequest
+	17, // 62: hasaki.payment.connector.v1.ConnectorService.QueryPayment:input_type -> hasaki.payment.connector.v1.QueryPaymentRequest
+	19, // 63: hasaki.payment.connector.v1.ConnectorService.CancelPayment:input_type -> hasaki.payment.connector.v1.CancelPaymentRequest
+	21, // 64: hasaki.payment.connector.v1.ConnectorService.CreateRefund:input_type -> hasaki.payment.connector.v1.CreateRefundRequest
+	23, // 65: hasaki.payment.connector.v1.ConnectorService.QueryRefund:input_type -> hasaki.payment.connector.v1.QueryRefundRequest
+	26, // 66: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:input_type -> hasaki.payment.connector.v1.ParseWebhookRequest
+	28, // 67: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:input_type -> hasaki.payment.connector.v1.ParseRedirectRequest
+	12, // 68: hasaki.payment.connector.v1.ConnectorService.Describe:output_type -> hasaki.payment.connector.v1.DescribeResponse
+	14, // 69: hasaki.payment.connector.v1.ConnectorService.CreatePayment:output_type -> hasaki.payment.connector.v1.CreatePaymentResponse
+	16, // 70: hasaki.payment.connector.v1.ConnectorService.Charge:output_type -> hasaki.payment.connector.v1.ChargeResponse
+	18, // 71: hasaki.payment.connector.v1.ConnectorService.QueryPayment:output_type -> hasaki.payment.connector.v1.QueryPaymentResponse
+	20, // 72: hasaki.payment.connector.v1.ConnectorService.CancelPayment:output_type -> hasaki.payment.connector.v1.CancelPaymentResponse
+	22, // 73: hasaki.payment.connector.v1.ConnectorService.CreateRefund:output_type -> hasaki.payment.connector.v1.CreateRefundResponse
+	24, // 74: hasaki.payment.connector.v1.ConnectorService.QueryRefund:output_type -> hasaki.payment.connector.v1.QueryRefundResponse
+	27, // 75: hasaki.payment.connector.v1.ConnectorService.ParseWebhook:output_type -> hasaki.payment.connector.v1.ParseWebhookResponse
+	29, // 76: hasaki.payment.connector.v1.ConnectorService.ParseRedirect:output_type -> hasaki.payment.connector.v1.ParseRedirectResponse
+	68, // [68:77] is the sub-list for method output_type
+	59, // [59:68] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_hasaki_payment_connector_v1_connector_proto_init() }

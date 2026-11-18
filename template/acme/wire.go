@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
@@ -100,9 +101,34 @@ func errorCode(body []byte) (code, message string, ok bool) {
 // values là các giá trị của khách cần che khỏi vết (hợp đồng của connector.RawExchange, luật LOG-1).
 func (c customerJSON) values() []string { return []string{c.Name, c.Email, c.Phone, c.Address} }
 
-func newPaymentRequest(req connector.CreatePaymentRequest) paymentRequest {
+// orderCode là mã đơn gửi acme: yymmdd (ngày TẠO giao dịch ở múi giờ loc) + "_" + mã giao dịch của core. Chỉ
+// dựng từ TransactionCode và CreatedAt mà core cấp (giống nhau ở mọi lần gọi lại), KHÔNG BAO GIỜ từ time.Now():
+// truy vấn một lệnh tạo chưa rõ kết quả phải dựng lại đúng mã đã gửi (luật ID-4). CreatedAt zero (core cũ) vẫn
+// tất định, chỉ là ngày vô nghĩa.
+func orderCode(tx string, createdAt time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return createdAt.In(loc).Format("060102") + "_" + tx
+}
+
+// transactionCodeOf tách mã giao dịch của core khỏi mã đơn của acme (bỏ "yymmdd_"); ok sai nếu sai dạng.
+func transactionCodeOf(order string) (string, bool) {
+	date, tx, found := strings.Cut(order, "_")
+	if !found || len(date) != 6 || tx == "" {
+		return "", false
+	}
+	for i := 0; i < len(date); i++ {
+		if date[i] < '0' || date[i] > '9' {
+			return "", false
+		}
+	}
+	return tx, true
+}
+
+func newPaymentRequest(req connector.CreatePaymentRequest, loc *time.Location) paymentRequest {
 	return paymentRequest{
-		OrderCode: req.TransactionCode, Amount: req.Money.Amount, Currency: req.Money.Currency,
+		OrderCode: orderCode(req.TransactionCode, req.CreatedAt, loc), Amount: req.Money.Amount, Currency: req.Money.Currency,
 		ReturnURL: req.ReturnURL, CancelURL: req.CancelURL, ClientIP: req.ClientIP,
 		Customer: customerJSON{ID: req.Customer.ID, Name: req.Customer.Name, Email: req.Customer.Email, Phone: req.Customer.Phone,
 			Address: req.Customer.Address},

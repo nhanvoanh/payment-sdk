@@ -129,6 +129,8 @@ message CreatePaymentRequest {
   string cancel_url = 7;
   string client_ip = 8;
   map<string, string> metadata = 9;
+  // Thời điểm tạo giao dịch đã lưu (UTC, micro giây); giống nhau ở mọi lần gọi lại. Thêm sau.
+  google.protobuf.Timestamp created_at = 10;
 }
 
 message CreatePaymentResponse {
@@ -150,6 +152,8 @@ message ChargeRequest {
   string cancel_url = 7;
   string client_ip = 8;
   map<string, string> metadata = 9;
+  // Thời điểm tạo giao dịch đã lưu. Thêm sau.
+  google.protobuf.Timestamp created_at = 10;
 }
 
 message ChargeResponse {
@@ -165,6 +169,8 @@ message ChargeResponse {
 message QueryPaymentRequest {
   string transaction_code = 1;
   string provider_ref = 2;
+  // Thời điểm tạo giao dịch, đúng giá trị đã gửi lúc tạo. Thêm sau.
+  google.protobuf.Timestamp created_at = 3;
 }
 
 // found=false: đối tác không biết giao dịch này; khi đó status không được xét.
@@ -185,6 +191,8 @@ message CancelPaymentRequest {
   string transaction_code = 1;
   string provider_ref = 2;
   string idempotency_key = 3;
+  // Thời điểm tạo giao dịch, đúng giá trị đã gửi lúc tạo. Thêm sau.
+  google.protobuf.Timestamp created_at = 4;
 }
 
 message CancelPaymentResponse {
@@ -201,6 +209,9 @@ message CreateRefundRequest {
   Money money = 5;
   string reason = 6;
   string customer_id = 7;
+  // Thời điểm tạo giao dịch gốc và của lệnh hoàn, đã lưu. Thêm sau.
+  google.protobuf.Timestamp transaction_created_at = 8;
+  google.protobuf.Timestamp created_at = 9;
 }
 
 message CreateRefundResponse {
@@ -214,6 +225,9 @@ message QueryRefundRequest {
   string refund_code = 1;
   string provider_ref = 2;
   string transaction_code = 3;
+  // Thời điểm tạo lệnh hoàn và của giao dịch gốc, đúng giá trị đã gửi ở CreateRefund. Thêm sau.
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp transaction_created_at = 5;
 }
 
 message QueryRefundResponse {

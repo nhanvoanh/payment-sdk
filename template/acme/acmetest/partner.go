@@ -32,7 +32,8 @@ var (
 	_ conformance.Partner  = (*Partner)(nil)
 	_ conformance.Tamperer = (*Partner)(nil)
 
-	_ conformance.RequestCounter = (*Partner)(nil)
+	_ conformance.RequestCounter  = (*Partner)(nil)
+	_ conformance.RequestRecorder = (*Partner)(nil)
 )
 
 type payment struct {
@@ -59,8 +60,10 @@ type Partner struct {
 	lis      net.Listener
 	mode     conformance.Mode
 	tokens   map[string]bool
-	payments map[string]*payment // theo order_code
+	payments map[string]*payment // theo order_code (yymmdd_<mã giao dịch>), như acme thật
+	byTx     map[string]*payment // theo mã giao dịch của core (phần sau "yymmdd_"), cho các hàm của test
 	byID     map[string]*payment
+	orders   []string          // order_code của mọi lệnh tạo hợp lệ đã nhận (conformance.RequestRecorder)
 	refunds  map[string]string // refund_code -> status
 	seq      int
 
@@ -79,7 +82,8 @@ func NewPartner(tb testing.TB) *Partner {
 	}
 	p := &Partner{
 		tb: tb, addr: lis.Addr().String(), lis: lis, done: make(chan struct{}),
-		tokens: map[string]bool{}, payments: map[string]*payment{}, byID: map[string]*payment{}, refunds: map[string]string{},
+		tokens: map[string]bool{}, payments: map[string]*payment{}, byTx: map[string]*payment{}, byID: map[string]*payment{},
+		refunds: map[string]string{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /oauth/token", p.handleToken)
@@ -110,10 +114,30 @@ func (p *Partner) PaymentsCreated() int { return p.get(func() int { return p.cre
 func (p *Partner) CustomerAddress(tx string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if pay := p.payments[tx]; pay != nil {
+	if pay := p.byTx[tx]; pay != nil {
 		return pay.Customer.Address
 	}
 	return ""
+}
+
+// OrderCodes cài conformance.RequestRecorder: order_code của mọi lệnh tạo hợp lệ đã nhận, theo thứ tự.
+func (p *Partner) OrderCodes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.orders...)
+}
+
+// txOf tách mã giao dịch khỏi order_code "yymmdd_<mã>" (giao thức acme); ok sai nếu sai dạng.
+func txOf(order string) (string, bool) {
+	if len(order) < 8 || order[6] != '_' {
+		return "", false
+	}
+	for _, c := range order[:6] {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	return order[7:], true
 }
 
 // BusinessRequests cài conformance.RequestCounter: mọi request nghiệp vụ đã tới (kể cả 401 và khi treo), không tính token.
@@ -171,12 +195,13 @@ func (p *Partner) SetMode(m conformance.Mode) {
 	}
 }
 
-// SetPaymentStatus đặt câu trả lời cho lần truy vấn kế tiếp của giao dịch (conformance.Partner).
+// SetPaymentStatus đặt câu trả lời cho lần truy vấn kế tiếp của giao dịch (conformance.Partner). Giao dịch acme
+// chưa nhận lệnh tạo thì chưa biết order_code: truy vấn theo bất kỳ ngày nào của tx cũng thấy nó.
 func (p *Partner) SetPaymentStatus(tx string, st connector.Status, paid paykit.Money) {
 	p.set(func() {
-		pay := p.payments[tx]
+		pay := p.byTx[tx]
 		if pay == nil {
-			pay = p.newPayment(tx)
+			pay = p.newPayment(tx, "")
 		}
 		pay.Status, pay.Paid = acmeStatus(st), paid
 	})
@@ -200,10 +225,17 @@ func (p *Partner) TamperedWebhook(raw connector.RawWebhook) connector.RawWebhook
 	return raw
 }
 
-// SignedWebhookOfType như SignedWebhook nhưng chọn loại sự kiện, để test sự kiện không liên quan.
+// SignedWebhookOfType như SignedWebhook nhưng chọn loại sự kiện, để test sự kiện không liên quan. order_code là
+// mã acme đã nhận lúc tạo; giao dịch chưa từng tạo thì lấy ngày hôm nay (đối tác giả, không phải connector).
 func (p *Partner) SignedWebhookOfType(typ, tx, ref string, st connector.Status, paid paykit.Money) connector.RawWebhook {
+	order := time.Now().UTC().Format("060102") + "_" + tx
+	p.set(func() {
+		if pay := p.byTx[tx]; pay != nil && pay.OrderCode != "" {
+			order = pay.OrderCode
+		}
+	})
 	body, _ := json.Marshal(map[string]any{
-		"event_id": "evt_" + tx + "_" + acmeStatus(st), "type": typ, "order_code": tx, "payment_id": ref,
+		"event_id": "evt_" + tx + "_" + acmeStatus(st), "type": typ, "order_code": order, "payment_id": ref,
 		"status": acmeStatus(st), "amount_paid": paid.Amount, "currency": paid.Currency,
 	})
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -228,11 +260,14 @@ func acmeStatus(st connector.Status) string {
 	}
 }
 
-// newPayment gọi khi đã giữ mu.
-func (p *Partner) newPayment(tx string) *payment {
+// newPayment gọi khi đã giữ mu; order rỗng là chưa biết order_code (đặt trạng thái trước khi tạo).
+func (p *Partner) newPayment(tx, order string) *payment {
 	p.seq++
-	pay := &payment{ID: fmt.Sprintf("pay_%d_%s", p.seq, tx), OrderCode: tx, Status: "pending"}
-	p.payments[tx], p.byID[pay.ID] = pay, pay
+	pay := &payment{ID: fmt.Sprintf("pay_%d_%s", p.seq, tx), OrderCode: order, Status: "pending"}
+	p.byTx[tx], p.byID[pay.ID] = pay, pay
+	if order != "" {
+		p.payments[order] = pay
+	}
 	return pay
 }
 
@@ -328,15 +363,27 @@ func (p *Partner) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Currency  string       `json:"currency"`
 		Customer  customerJSON `json:"customer"`
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.OrderCode == "" || in.Amount <= 0 {
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.Amount <= 0 {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_request", "thiếu order_code hoặc amount")
+		return
+	}
+	tx, ok := txOf(in.OrderCode)
+	if !ok {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_request", "order_code phải có dạng yymmdd_<mã>")
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.orders = append(p.orders, in.OrderCode)
 	pay := p.payments[in.OrderCode] // gửi lại cùng order_code (cùng Idempotency-Key) trả lại thanh toán cũ
 	if pay == nil {
-		pay = p.newPayment(in.OrderCode)
+		if pre := p.byTx[tx]; pre != nil && pre.OrderCode == "" {
+			pay = pre // trạng thái đã được đặt trước khi tạo
+			pay.OrderCode = in.OrderCode
+			p.payments[in.OrderCode] = pay
+		} else {
+			pay = p.newPayment(tx, in.OrderCode)
+		}
 		pay.Customer = in.Customer
 		p.created++
 	}
@@ -348,7 +395,13 @@ func (p *Partner) handleCreate(w http.ResponseWriter, r *http.Request) {
 func (p *Partner) handleQuery(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	pay := p.payments[r.URL.Query().Get("order_code")]
+	order := r.URL.Query().Get("order_code")
+	pay := p.payments[order]
+	if tx, ok := txOf(order); pay == nil && ok {
+		if pre := p.byTx[tx]; pre != nil && pre.OrderCode == "" {
+			pay = pre // trạng thái đặt trước khi acme nhận lệnh tạo: chưa gắn ngày nào
+		}
+	}
 	if pay == nil {
 		writeError(w, http.StatusNotFound, "not_found", "không có giao dịch này")
 		return

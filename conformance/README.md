@@ -51,6 +51,7 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `ID-1` | `Name()` khớp `^[a-z][a-z0-9_]{0,31}$` và không đổi giữa hai lần gọi; qua gRPC: `Describe` thành công. | Tên là khoá cấu hình và khoá khử trùng webhook; tên đổi thì một sự kiện có thể bị áp hai lần, tên sai thì core không nạp được connector. |
 | `ID-2` | `Methods()` không rỗng, không trùng, có `Harness.Method`. | Core định tuyến giao dịch theo phương thức; thiếu thì khách không trả tiền được qua đối tác này. |
 | `ID-3` | `Supports(op)` đúng ⇒ connector cài interface tương ứng (`connector.As…` đúng). | Khai mà không cài thì lệnh huỷ/hoàn tiền nhận `ErrNotSupported` lúc chạy. |
+| `ID-4` | (cần `Harness.CreateCallsPartner` và `Partner` cài `RequestRecorder`; không cài thì `Skipped`) `CreatePayment` hai lần với CÙNG request, lần hai sau khi đồng hồ qua một ranh giới giây → mã đơn đối tác giả ghi nhận giống nhau; và mã không mang ngày hôm nay (`yyyymmdd`/`yymmdd` ở UTC hay UTC+7) khi `CreatedAt` ở ngày khác. | Connector phải dựng mã phía đối tác TẤT ĐỊNH từ `TransactionCode`/`RefundCode` + `CreatedAt` (core cấp, giá trị đã lưu, UTC, micro giây, như nhau ở mọi lần gọi lại), không từ đồng hồ lúc gọi. Không thì truy vấn/huỷ một lệnh tạo chưa rõ kết quả (chưa có `ProviderRef`) hỏi sai mã, đối tác báo không thấy và core cho hết hạn một đơn khách đã trả. |
 | `PAY-1` | Create ở `ModeNormal`: không lỗi; `Status` thuộc pending, succeeded, failed, canceled, on_hold; `NextAction` redirect có URL tuyệt đối http(s), show_qr có `QRData`; `NextAction.Kind` ngoài none/redirect/show_qr/rỗng bị từ chối. | Khách không tới được trang thanh toán hoặc core không biết đã thu tiền chưa. |
 | `PAY-2` | `ProviderRef` là UTF-8 hợp lệ, không ký tự điều khiển, tối đa 255 ký tự. | Dài hơn thì core cắt và gửi bản bị cắt cho đối tác ở lệnh truy vấn/hoàn sau: đối tác không nhận ra giao dịch. |
 | `PAY-3` | `ModeDown` (từ chối kết nối) → lỗi khớp `ErrProviderUnavailable`, không khớp `ErrUnknownOutcome`/`ErrProviderRejected`. | Chỉ lỗi này cho core chốt thất bại ngay để khách tạo lại thanh toán; sai thì giao dịch treo. |
@@ -79,7 +80,10 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `LOG-1` | Create (và Charge nếu có) với khách mang chuỗi canh (tên có dấu, email có `+`, điện thoại đầu `0`, địa chỉ nhiều dòng), rồi (nếu có `query_payment`) truy vấn chính giao dịch đó: `RawExchange.RequestBody`, `ResponseBody` và câu lỗi không còn chuỗi canh ở dạng thô, JSON-escape (kể cả `\uXXXX`, `\/`), URL-encode (`QueryEscape`, `PathEscape`), khác hoa thường, (điện thoại) dạng `84…`/`+84…`, hay (địa chỉ) một dòng riêng của nó. Hoàn tiền không mang dữ liệu khách nên không kiểm. Cách so là gói `redact`, cùng thuật toán với `providerhttp.Redact` và core. | Vết lời gọi đối tác (bảng `provider_requests`) và log của core lưu dữ liệu cá nhân của khách. Core che lại lần nữa nhưng chỉ với giá trị nó biết: đối tác trả lời bằng cách viết khác (ví dụ tên tách họ/tên) thì chỉ connector che được. |
 | `CTX-1` | Mọi thao tác gọi mạng (Create, Charge, Query, Cancel, Refund, QueryRefund đã khai) nhận ctx đã huỷ, đối tác treo → trả về trong 2 s, không panic. | Core không dừng được lời gọi khi tắt máy hay khi khách bỏ đi. |
 
-`Harness.CreateCallsPartner == false` (Create chỉ ký tại chỗ) thì `PAY-3`..`PAY-6` bị bỏ.
+`Harness.CreateCallsPartner == false` (Create chỉ ký tại chỗ) thì `ID-4` và `PAY-3`..`PAY-6` bị bỏ.
+
+Mọi request bộ luật gửi mang `CreatedAt` (và `TransactionCreatedAt` ở hoàn tiền) cố định ở quá khứ như core
+gửi giá trị đã lưu, nên connector dựng mã từ `CreatedAt` tìm lại được giao dịch ở truy vấn, huỷ và hoàn.
 
 Đối tác giả nên làm như đối tác thật: nhớ khách gửi lúc tạo và nhắc lại trong phản hồi truy vấn (như
 `acmetest`), để `LOG-1` kiểm được cả việc connector che phản hồi. Che bằng `providerhttp.Redact(body, giá trị...)`.
@@ -96,6 +100,9 @@ Mã luật cố định, là hợp đồng với developer connector.
 - Tuỳ chọn `conformance.Tamperer` (`TamperedWebhook(raw) RawWebhook`): trả bản sao webhook đã ký với nội
   dung **được ký** bị đổi, chữ ký giữ nguyên. Nên cài, nhất là khi chữ ký không phủ toàn bộ thân: không cài
   thì `WHK-4` lật byte giữa thân, và nếu byte đó nằm ngoài phần được ký thì connector đúng cũng bị báo vi phạm.
+- Tuỳ chọn `conformance.RequestRecorder` (`OrderCodes() []string`): mã đơn (mã giao dịch phía đối tác, đúng như
+  connector đặt trong request) của mọi lệnh tạo thanh toán đối tác giả đã NHẬN, theo thứ tự nhận. Nên cài: không
+  cài thì `ID-4` bị bỏ.
 - Tuỳ chọn `conformance.RequestCounter` (`BusinessRequests() int`): số request nghiệp vụ (không tính lấy
   token) đối tác giả đã nhận từ lúc tạo. Đếm ngay khi NHẬN request, trước khi treo hay trả lời, trên MỌI
   đường nghiệp vụ (tạo, truy vấn, huỷ, hoàn…); `ModeDown` không tính. Nên

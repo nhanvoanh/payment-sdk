@@ -27,10 +27,12 @@ func wire[T proto.Message](t *testing.T, m T) T {
 }
 
 var (
-	t0   = time.Date(2026, 11, 18, 9, 30, 15, 123456789, time.UTC)
-	card = &paykit.CardMasked{Brand: "visa", Last4: "4242", Holder: "NGUYỄN VĂN A"}
-	raw  = connector.RawExchange{RequestBody: "req ✓", ResponseBody: "phản hồi", HTTPStatus: 201, DurationMS: 42}
-	cust = paykit.Customer{ID: "c1", Name: "Trần Thị Bé", Email: "a@acme.test", Phone: "+84901234567",
+	t0 = time.Date(2026, 11, 18, 9, 30, 15, 123456789, time.UTC)
+	// tCreated: thời điểm tạo như core gửi (UTC, micro giây), sát nửa đêm để lệch múi giờ đổi ngày.
+	tCreated = time.Date(2026, 11, 18, 23, 59, 59, 999999000, time.UTC)
+	card     = &paykit.CardMasked{Brand: "visa", Last4: "4242", Holder: "NGUYỄN VĂN A"}
+	raw      = connector.RawExchange{RequestBody: "req ✓", ResponseBody: "phản hồi", HTTPStatus: 201, DurationMS: 42}
+	cust     = paykit.Customer{ID: "c1", Name: "Trần Thị Bé", Email: "a@acme.test", Phone: "+84901234567",
 		Address: "12 Lê Lợi\r\nPhường Bến Nghé\tQuận 1\n"}
 	meta = map[string]string{"k": "v", "tên": "giá trị"}
 )
@@ -58,7 +60,7 @@ func TestCreatePaymentRequest_RoundTrip(t *testing.T) {
 	full := connector.CreatePaymentRequest{
 		TransactionCode: "TX1", IdempotencyKey: "idem", Money: paykit.Money{Amount: 1_000_000, Currency: "VND"},
 		Method: paykit.MethodQR, Customer: cust, ReturnURL: "https://r", CancelURL: "https://c",
-		ClientIP: "1.2.3.4", Metadata: meta,
+		ClientIP: "1.2.3.4", Metadata: meta, CreatedAt: tCreated,
 	}
 	for name, in := range map[string]connector.CreatePaymentRequest{
 		"đầy đủ": full, "zero": {}, "metadata rỗng": {Metadata: map[string]string{}},
@@ -77,6 +79,7 @@ func TestChargeRequest_RoundTrip(t *testing.T) {
 	in := connector.ChargeRequest{
 		TransactionCode: "TX1", IdempotencyKey: "idem", Money: paykit.Money{Amount: 5, Currency: "USD"},
 		Method: paykit.MethodVisa, Customer: cust, ReturnURL: "u1", CancelURL: "u2", ClientIP: "::1", Metadata: meta,
+		CreatedAt: tCreated,
 	}
 	assert.Equal(t, in, connectorrpc.ChargeRequestFromProto(wire(t, connectorrpc.ChargeRequestToProto(in))))
 	assert.Equal(t, connector.ChargeRequest{}, connectorrpc.ChargeRequestFromProto(wire(t, connectorrpc.ChargeRequestToProto(connector.ChargeRequest{}))))
@@ -84,16 +87,18 @@ func TestChargeRequest_RoundTrip(t *testing.T) {
 }
 
 func TestSimpleRequests_RoundTrip(t *testing.T) {
-	q := connector.QueryPaymentRequest{TransactionCode: "T", ProviderRef: "P"}
+	q := connector.QueryPaymentRequest{TransactionCode: "T", ProviderRef: "P", CreatedAt: tCreated}
 	assert.Equal(t, q, connectorrpc.QueryPaymentRequestFromProto(wire(t, connectorrpc.QueryPaymentRequestToProto(q))))
-	c := connector.CancelRequest{TransactionCode: "T", ProviderRef: "P", IdempotencyKey: "I"}
+	c := connector.CancelRequest{TransactionCode: "T", ProviderRef: "P", IdempotencyKey: "I", CreatedAt: tCreated}
 	assert.Equal(t, c, connectorrpc.CancelRequestFromProto(wire(t, connectorrpc.CancelRequestToProto(c))))
 	r := connector.RefundRequest{
 		RefundCode: "R", IdempotencyKey: "I", TransactionCode: "T", ProviderRef: "P",
 		Money: paykit.Money{Amount: 9, Currency: "VND"}, Reason: "khách đổi ý", CustomerID: "c",
+		TransactionCreatedAt: tCreated, CreatedAt: tCreated.Add(time.Hour),
 	}
 	assert.Equal(t, r, connectorrpc.RefundRequestFromProto(wire(t, connectorrpc.RefundRequestToProto(r))))
-	qr := connector.QueryRefundRequest{RefundCode: "R", ProviderRef: "P", TransactionCode: "T"}
+	qr := connector.QueryRefundRequest{RefundCode: "R", ProviderRef: "P", TransactionCode: "T",
+		CreatedAt: tCreated.Add(time.Hour), TransactionCreatedAt: tCreated}
 	assert.Equal(t, qr, connectorrpc.QueryRefundRequestFromProto(wire(t, connectorrpc.QueryRefundRequestToProto(qr))))
 	assert.Equal(t, connector.RefundRequest{}, connectorrpc.RefundRequestFromProto(nil))
 }

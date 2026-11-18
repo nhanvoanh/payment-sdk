@@ -22,6 +22,7 @@ var rules = []rule{
 	{id: "ID-1", check: checkID1},
 	{id: "ID-2", check: checkID2},
 	{id: "ID-3", check: checkID3},
+	{id: "ID-4", createPartner: true, check: checkID4},
 	{id: "PAY-1", check: checkPAY1},
 	{id: "PAY-2", check: checkPAY2},
 	{id: "PAY-3", createPartner: true, check: checkPAY3},

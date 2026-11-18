@@ -17,7 +17,7 @@ func (e *env) createReq(tx string) connector.CreatePaymentRequest {
 		TransactionCode: tx, IdempotencyKey: "idem-" + tx, Money: e.h.Amount, Method: e.h.Method,
 		Customer:  paykit.Customer{ID: "C1", Name: "Nguyen Van A", Email: "a@example.com", Phone: "0900000000"},
 		ReturnURL: "https://shop.example/return/" + tx, CancelURL: "https://shop.example/cancel/" + tx,
-		ClientIP: "203.0.113.10",
+		ClientIP: "203.0.113.10", CreatedAt: txCreatedAt,
 	}
 }
 
@@ -245,7 +245,7 @@ func (e *env) query(req connector.QueryPaymentRequest) (st connector.PaymentStat
 // checkQRY1: core truy vấn cả giao dịch chưa từng tới được đối tác; "không thấy" phải là Found false.
 func checkQRY1(e *env) {
 	e.p.SetMode(ModeNormal)
-	st, ok, err := e.query(connector.QueryPaymentRequest{TransactionCode: e.tx()})
+	st, ok, err := e.query(connector.QueryPaymentRequest{TransactionCode: e.tx(), CreatedAt: txCreatedAt})
 	if !ok {
 		return
 	}
@@ -266,7 +266,7 @@ func checkQRY2(e *env) {
 	}
 	e.p.SetMode(ModeNormal)
 	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
-	st, ok, err := e.query(connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref})
+	st, ok, err := e.query(connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref, CreatedAt: txCreatedAt})
 	if !ok {
 		return
 	}
@@ -297,7 +297,7 @@ func checkQRY3(e *env) {
 		return
 	}
 	e.expectUnknown(ModeHang, "QueryPayment", func(ctx context.Context) error {
-		_, err := e.querier().QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref})
+		_, err := e.querier().QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref, CreatedAt: txCreatedAt})
 		return err
 	})
 }
@@ -317,7 +317,7 @@ func checkCXL1(e *env) {
 	var res connector.CancelResult
 	var err error
 	if !e.call("CancelPayment", callLimit+time.Second, func() {
-		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx})
+		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx, CreatedAt: txCreatedAt})
 	}) {
 		return
 	}
@@ -341,14 +341,14 @@ func checkCTX1(e *env) {
 			_, _ = e.c.(connector.Charger).Charge(ctx, e.chargeReq(tx))
 		}},
 		{connector.OpQueryPayment, func() {
-			_, _ = e.c.(connector.PaymentQuerier).QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx})
+			_, _ = e.c.(connector.PaymentQuerier).QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx, CreatedAt: txCreatedAt})
 		}},
 		{connector.OpCancel, func() {
-			_, _ = e.c.(connector.Canceler).CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-" + tx})
+			_, _ = e.c.(connector.Canceler).CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-" + tx, CreatedAt: txCreatedAt})
 		}},
 		{connector.OpRefund, func() { _, _ = e.c.(connector.Refunder).CreateRefund(ctx, e.refundReq(tx, "", "R"+tx)) }},
 		{connector.OpQueryRefund, func() {
-			_, _ = e.c.(connector.RefundQuerier).QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx, TransactionCode: tx})
+			_, _ = e.c.(connector.RefundQuerier).QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx, TransactionCode: tx, CreatedAt: refundCreatedAt, TransactionCreatedAt: txCreatedAt})
 		}},
 	}
 	for _, c := range calls {
@@ -377,7 +377,7 @@ func checkCXL2(e *env) {
 		var res connector.CancelResult
 		ok, err := e.modeCall(m, "CancelPayment", func(ctx context.Context) error {
 			var err error
-			res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx})
+			res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx, CreatedAt: txCreatedAt})
 			return err
 		})
 		if !ok {
@@ -422,7 +422,7 @@ func (e *env) cancelWithoutRefOnHang(tx string) {
 	ok, err := e.modeCall(ModeHang, "CancelPayment thiếu ProviderRef", func(ctx context.Context) error {
 		before = counter.BusinessRequests() // chụp ngay trước lời huỷ đang xét, sau khi đã đặt mode
 		var err error
-		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-noref-" + tx})
+		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-noref-" + tx, CreatedAt: txCreatedAt})
 		return err
 	})
 	if !ok {
@@ -471,7 +471,7 @@ func checkCXL4(e *env) {
 	var res connector.CancelResult
 	var err error
 	if !e.call("CancelPayment", callLimit+time.Second, func() {
-		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx})
+		res, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, ProviderRef: ref, IdempotencyKey: "cancel-" + tx, CreatedAt: txCreatedAt})
 	}) {
 		return
 	}
@@ -496,7 +496,7 @@ func checkCXL3(e *env) {
 	defer cancel()
 	var err error
 	if !e.call("CancelPayment", callLimit+time.Second, func() {
-		_, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-" + tx})
+		_, err = cn.CancelPayment(ctx, connector.CancelRequest{TransactionCode: tx, IdempotencyKey: "cancel-" + tx, CreatedAt: txCreatedAt})
 	}) {
 		return
 	}
@@ -514,7 +514,7 @@ func checkCXL3(e *env) {
 func (e *env) chargeReq(tx string) connector.ChargeRequest {
 	r := e.createReq(tx)
 	return connector.ChargeRequest{TransactionCode: tx, IdempotencyKey: r.IdempotencyKey, Money: r.Money, Method: r.Method,
-		Customer: r.Customer, ReturnURL: r.ReturnURL, CancelURL: r.CancelURL, ClientIP: r.ClientIP}
+		Customer: r.Customer, ReturnURL: r.ReturnURL, CancelURL: r.CancelURL, ClientIP: r.ClientIP, CreatedAt: r.CreatedAt}
 }
 
 // checkCHG1: Charge thu tiền trực tiếp nên luật tiền của Create (PAY-3..6) áp nguyên cho nó.
@@ -542,7 +542,7 @@ func checkQRY4(e *env) {
 	e.expectError(ModeGarbage, "QueryPayment",
 		"core áp kết quả connector tự suy ra (failed thì khách tạo lại thanh toán trong khi đối tác có thể đã thu tiền; không thấy thì giao dịch bị cho hết hạn)",
 		func(ctx context.Context) error {
-			_, err := e.querier().QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref})
+			_, err := e.querier().QueryPayment(ctx, connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: ref, CreatedAt: txCreatedAt})
 			return err
 		})
 }

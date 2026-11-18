@@ -272,7 +272,7 @@ func CreatePaymentRequestToProto(r connector.CreatePaymentRequest) *connectorpb.
 		TransactionCode: valid(r.TransactionCode), IdempotencyKey: valid(r.IdempotencyKey),
 		Money: MoneyToProto(r.Money), Method: valid(string(r.Method)), Customer: CustomerToProto(r.Customer),
 		ReturnUrl: valid(r.ReturnURL), CancelUrl: valid(r.CancelURL), ClientIp: valid(r.ClientIP),
-		Metadata: mapToProto(r.Metadata),
+		Metadata: mapToProto(r.Metadata), CreatedAt: TimeToProto(r.CreatedAt),
 	}
 }
 
@@ -282,7 +282,7 @@ func CreatePaymentRequestFromProto(r *connectorpb.CreatePaymentRequest) connecto
 		Money: MoneyFromProto(r.GetMoney()), Method: paykit.Method(r.GetMethod()),
 		Customer:  CustomerFromProto(r.GetCustomer()),
 		ReturnURL: r.GetReturnUrl(), CancelURL: r.GetCancelUrl(), ClientIP: r.GetClientIp(),
-		Metadata: mapFromProto(r.GetMetadata()),
+		Metadata: mapFromProto(r.GetMetadata()), CreatedAt: TimeFromProto(r.GetCreatedAt()),
 	}
 }
 
@@ -291,7 +291,7 @@ func ChargeRequestToProto(r connector.ChargeRequest) *connectorpb.ChargeRequest 
 		TransactionCode: valid(r.TransactionCode), IdempotencyKey: valid(r.IdempotencyKey),
 		Money: MoneyToProto(r.Money), Method: valid(string(r.Method)), Customer: CustomerToProto(r.Customer),
 		ReturnUrl: valid(r.ReturnURL), CancelUrl: valid(r.CancelURL), ClientIp: valid(r.ClientIP),
-		Metadata: mapToProto(r.Metadata),
+		Metadata: mapToProto(r.Metadata), CreatedAt: TimeToProto(r.CreatedAt),
 	}
 }
 
@@ -301,27 +301,31 @@ func ChargeRequestFromProto(r *connectorpb.ChargeRequest) connector.ChargeReques
 		Money: MoneyFromProto(r.GetMoney()), Method: paykit.Method(r.GetMethod()),
 		Customer:  CustomerFromProto(r.GetCustomer()),
 		ReturnURL: r.GetReturnUrl(), CancelURL: r.GetCancelUrl(), ClientIP: r.GetClientIp(),
-		Metadata: mapFromProto(r.GetMetadata()),
+		Metadata: mapFromProto(r.GetMetadata()), CreatedAt: TimeFromProto(r.GetCreatedAt()),
 	}
 }
 
 func QueryPaymentRequestToProto(r connector.QueryPaymentRequest) *connectorpb.QueryPaymentRequest {
-	return &connectorpb.QueryPaymentRequest{TransactionCode: valid(r.TransactionCode), ProviderRef: valid(r.ProviderRef)}
+	return &connectorpb.QueryPaymentRequest{TransactionCode: valid(r.TransactionCode), ProviderRef: valid(r.ProviderRef),
+		CreatedAt: TimeToProto(r.CreatedAt)}
 }
 
 func QueryPaymentRequestFromProto(r *connectorpb.QueryPaymentRequest) connector.QueryPaymentRequest {
-	return connector.QueryPaymentRequest{TransactionCode: r.GetTransactionCode(), ProviderRef: r.GetProviderRef()}
+	return connector.QueryPaymentRequest{TransactionCode: r.GetTransactionCode(), ProviderRef: r.GetProviderRef(),
+		CreatedAt: TimeFromProto(r.GetCreatedAt())}
 }
 
 func CancelRequestToProto(r connector.CancelRequest) *connectorpb.CancelPaymentRequest {
 	return &connectorpb.CancelPaymentRequest{
 		TransactionCode: valid(r.TransactionCode), ProviderRef: valid(r.ProviderRef), IdempotencyKey: valid(r.IdempotencyKey),
+		CreatedAt: TimeToProto(r.CreatedAt),
 	}
 }
 
 func CancelRequestFromProto(r *connectorpb.CancelPaymentRequest) connector.CancelRequest {
 	return connector.CancelRequest{
 		TransactionCode: r.GetTransactionCode(), ProviderRef: r.GetProviderRef(), IdempotencyKey: r.GetIdempotencyKey(),
+		CreatedAt: TimeFromProto(r.GetCreatedAt()),
 	}
 }
 
@@ -330,6 +334,7 @@ func RefundRequestToProto(r connector.RefundRequest) *connectorpb.CreateRefundRe
 		RefundCode: valid(r.RefundCode), IdempotencyKey: valid(r.IdempotencyKey),
 		TransactionCode: valid(r.TransactionCode), ProviderRef: valid(r.ProviderRef),
 		Money: MoneyToProto(r.Money), Reason: valid(r.Reason), CustomerId: valid(r.CustomerID),
+		TransactionCreatedAt: TimeToProto(r.TransactionCreatedAt), CreatedAt: TimeToProto(r.CreatedAt),
 	}
 }
 
@@ -338,18 +343,21 @@ func RefundRequestFromProto(r *connectorpb.CreateRefundRequest) connector.Refund
 		RefundCode: r.GetRefundCode(), IdempotencyKey: r.GetIdempotencyKey(),
 		TransactionCode: r.GetTransactionCode(), ProviderRef: r.GetProviderRef(),
 		Money: MoneyFromProto(r.GetMoney()), Reason: r.GetReason(), CustomerID: r.GetCustomerId(),
+		TransactionCreatedAt: TimeFromProto(r.GetTransactionCreatedAt()), CreatedAt: TimeFromProto(r.GetCreatedAt()),
 	}
 }
 
 func QueryRefundRequestToProto(r connector.QueryRefundRequest) *connectorpb.QueryRefundRequest {
 	return &connectorpb.QueryRefundRequest{
 		RefundCode: valid(r.RefundCode), ProviderRef: valid(r.ProviderRef), TransactionCode: valid(r.TransactionCode),
+		CreatedAt: TimeToProto(r.CreatedAt), TransactionCreatedAt: TimeToProto(r.TransactionCreatedAt),
 	}
 }
 
 func QueryRefundRequestFromProto(r *connectorpb.QueryRefundRequest) connector.QueryRefundRequest {
 	return connector.QueryRefundRequest{
 		RefundCode: r.GetRefundCode(), ProviderRef: r.GetProviderRef(), TransactionCode: r.GetTransactionCode(),
+		CreatedAt: TimeFromProto(r.GetCreatedAt()), TransactionCreatedAt: TimeFromProto(r.GetTransactionCreatedAt()),
 	}
 }
 

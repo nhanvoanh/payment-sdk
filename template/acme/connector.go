@@ -69,7 +69,8 @@ func (c *Connector) Methods() []paykit.Method { return []paykit.Method{paykit.Me
 
 // CreatePayment tạo thanh toán và trả URL để khách đi trả tiền.
 func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
-	resp, err := c.send(ctx, http.MethodPost, pathPayments, nil, req.IdempotencyKey, newPaymentRequest(req))
+	body := newPaymentRequest(req, c.cfg.Location)
+	resp, err := c.send(ctx, http.MethodPost, pathPayments, nil, req.IdempotencyKey, body)
 	if err != nil {
 		return connector.CreatePaymentResult{}, err
 	}
@@ -78,22 +79,24 @@ func (c *Connector) CreatePayment(ctx context.Context, req connector.CreatePayme
 		return connector.CreatePaymentResult{}, err
 	}
 	st, na, expires, err := w.forCreate()
-	if err == nil && w.OrderCode != req.TransactionCode {
+	if err == nil && w.OrderCode != body.OrderCode {
 		// Phản hồi nói về giao dịch khác: tin nó là gán nhầm tiền của khách khác.
 		err = fmt.Errorf("order_code %q không khớp mã đã gửi", w.OrderCode)
 	}
 	if err != nil {
 		return connector.CreatePaymentResult{}, badBody(err)
 	}
-	raw := redactRaw(resp.Raw, append(newPaymentRequest(req).Customer.values(), w.Customer.values()...)...)
+	raw := redactRaw(resp.Raw, append(body.Customer.values(), w.Customer.values()...)...)
 	return connector.CreatePaymentResult{ProviderRef: w.PaymentID, Status: st, NextAction: na, ExpiresAt: expires, Raw: raw}, nil
 }
 
-// QueryPayment tra theo mã giao dịch của ta. Acme không biết mã đó là chuyện bình thường (core truy vấn cả
+// QueryPayment tra theo mã đơn dựng lại từ TransactionCode + CreatedAt (đúng mã đã gửi lúc tạo, kể cả khi lệnh
+// tạo chưa nghe được trả lời nên chưa có ProviderRef). Acme không biết mã đó là chuyện bình thường (core truy vấn cả
 // giao dịch chưa từng tới được acme), nên 404 not_found là Found=false chứ không phải lỗi: nếu là lỗi thì
 // core không bao giờ đóng được giao dịch đó.
 func (c *Connector) QueryPayment(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
-	resp, err := c.send(ctx, http.MethodGet, pathPayments, url.Values{"order_code": {req.TransactionCode}}, "", nil)
+	order := orderCode(req.TransactionCode, req.CreatedAt, c.cfg.Location)
+	resp, err := c.send(ctx, http.MethodGet, pathPayments, url.Values{"order_code": {order}}, "", nil)
 	if err != nil {
 		return connector.PaymentStatus{}, err
 	}
@@ -198,8 +201,9 @@ func (c *Connector) ParseWebhook(_ context.Context, raw connector.RawWebhook) (c
 	}
 	// EventID là khoá khử trùng của core: lấy nguyên event_id của acme (ổn định qua mọi lần gửi lại,
 	// khác nhau giữa các sự kiện), không tự sinh và không dùng giờ nhận.
-	if w.EventID == "" || w.OrderCode == "" {
-		return connector.ProviderEvent{}, fmt.Errorf("acme: webhook thiếu event_id hoặc order_code")
+	tx, ok := transactionCodeOf(w.OrderCode)
+	if w.EventID == "" || !ok {
+		return connector.ProviderEvent{}, fmt.Errorf("acme: webhook thiếu event_id hoặc order_code sai dạng yymmdd_<mã>")
 	}
 	if err := w.validate(); err != nil {
 		return connector.ProviderEvent{}, fmt.Errorf("acme: webhook không hợp lệ: %w", err)
@@ -207,7 +211,7 @@ func (c *Connector) ParseWebhook(_ context.Context, raw connector.RawWebhook) (c
 	st, _ := w.status()
 	paidAt, _ := parseTime("paid_at", w.PaidAt)
 	return connector.ProviderEvent{
-		EventID: w.EventID, Kind: connector.EventKindPayment, TransactionCode: w.OrderCode, ProviderRef: w.PaymentID,
+		EventID: w.EventID, Kind: connector.EventKindPayment, TransactionCode: tx, ProviderRef: w.PaymentID,
 		Status: st, AmountPaid: w.paid(), PaidAt: paidAt, Raw: raw.Body,
 	}, nil
 }

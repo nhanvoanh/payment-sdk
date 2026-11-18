@@ -11,6 +11,7 @@ func (e *env) refundReq(tx, ref, refundCode string) connector.RefundRequest {
 	return connector.RefundRequest{
 		RefundCode: refundCode, IdempotencyKey: "idem-" + refundCode, TransactionCode: tx, ProviderRef: ref,
 		Money: e.h.Amount, Reason: "conformance", CustomerID: "C1",
+		TransactionCreatedAt: txCreatedAt, CreatedAt: refundCreatedAt,
 	}
 }
 
@@ -45,7 +46,7 @@ func checkRFD2(e *env) {
 	var st connector.RefundStatus
 	var err error
 	if !e.call("QueryRefund", callLimit+time.Second, func() {
-		st, err = q.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx, TransactionCode: tx})
+		st, err = q.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx, TransactionCode: tx, CreatedAt: refundCreatedAt, TransactionCreatedAt: txCreatedAt})
 	}) {
 		return
 	}
@@ -66,7 +67,7 @@ func checkRFD3(e *env) {
 		e.expectError(m, "QueryRefund",
 			"core áp kết quả connector tự suy ra (failed thì core chốt hoàn thất bại và có thể hoàn tiền cho khách hai lần)",
 			func(ctx context.Context) error {
-				_, err := q.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx, TransactionCode: tx})
+				_, err := q.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: "R" + tx, TransactionCode: tx, CreatedAt: refundCreatedAt, TransactionCreatedAt: txCreatedAt})
 				return err
 			})
 	}

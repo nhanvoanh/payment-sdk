@@ -18,10 +18,14 @@ type Config struct {
 	SecretKey  string        // vừa để lấy token vừa để ký webhook
 	Timeout    time.Duration // hạn tổng cho một lời gọi tới acme; mặc định 10 giây
 	MaxConns   int           // số kết nối tối đa tới acme; mặc định của providerhttp
+	// Location là múi giờ của ngày trong mã đơn (yymmdd_<mã giao dịch>); nil là UTC. Đổi sau khi đã chạy thật
+	// thì truy vấn các giao dịch cũ dựng sai mã: chỉ đặt một lần.
+	Location *time.Location
 }
 
-// ConfigFromEnv đọc ACME_BASE_URL, ACME_MERCHANT_ID, ACME_SECRET_KEY (bắt buộc) và ACME_TIMEOUT
-// (tuỳ chọn, ví dụ "8s"). Thiếu hay sai thì lỗi nêu tên biến, không bao giờ nêu giá trị (có thể là secret).
+// ConfigFromEnv đọc ACME_BASE_URL, ACME_MERCHANT_ID, ACME_SECRET_KEY (bắt buộc), ACME_TIMEOUT
+// (tuỳ chọn, ví dụ "8s") và ACME_TIMEZONE (tuỳ chọn, tên IANA như "Asia/Ho_Chi_Minh"; mặc định UTC; image cần
+// dữ liệu múi giờ — distroless/static có sẵn). Thiếu hay sai thì lỗi nêu tên biến, không bao giờ nêu giá trị (có thể là secret).
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	// Cắt khoảng trắng (xuống dòng thừa khi dán secret từ file là lỗi quen thuộc) trước khi kiểm.
 	env := func(k string) string { return strings.TrimSpace(getenv(k)) }
@@ -43,6 +47,13 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("acme: ACME_TIMEOUT phải là khoảng thời gian dương, ví dụ 8s")
 		}
 		cfg.Timeout = d
+	}
+	if s := env("ACME_TIMEZONE"); s != "" {
+		loc, err := time.LoadLocation(s)
+		if err != nil {
+			return Config{}, errors.New("acme: ACME_TIMEZONE phải là tên múi giờ IANA, ví dụ Asia/Ho_Chi_Minh")
+		}
+		cfg.Location = loc
 	}
 	return cfg, nil
 }

@@ -101,6 +101,13 @@ type RawWebhook struct {
 //   - ProviderCode, ProviderMessage: UTF-8 hợp lệ, bỏ ký tự điều khiển; core cắt còn 64 và 500 ký tự.
 //   - NextAction và Card: UTF-8 hỏng thay bằng U+FFFD, không giới hạn độ dài.
 
+// Thời điểm tạo trong mọi request (CreatedAt, TransactionCreatedAt) là giá trị core ĐÃ LƯU, UTC, độ chính xác
+// micro giây, giống hệt nhau ở mọi lần gọi lại cho cùng một giao dịch/lệnh hoàn (kể cả sau khi core khởi động
+// lại). Connector sinh mã phía đối tác (ví dụ tiền tố yymmdd) TẤT ĐỊNH từ TransactionCode/RefundCode và các
+// thời điểm này, KHÔNG BAO GIỜ từ đồng hồ lúc gọi: truy vấn hay huỷ một lệnh tạo "chưa rõ kết quả" (không có
+// ProviderRef) phải dựng lại đúng mã đã gửi, nếu không đối tác trả "không thấy" cho một đơn khách đã trả (luật
+// ID-4). Múi giờ của ngày trong mã là việc của connector (đổi từ UTC). Core cũ không gửi thì giá trị là zero.
+
 type CreatePaymentRequest struct {
 	TransactionCode, IdempotencyKey string
 	Money                           paykit.Money
@@ -108,6 +115,8 @@ type CreatePaymentRequest struct {
 	Customer                        paykit.Customer
 	ReturnURL, CancelURL, ClientIP  string
 	Metadata                        map[string]string
+	// CreatedAt là thời điểm tạo giao dịch (xem trên).
+	CreatedAt time.Time
 }
 
 type CreatePaymentResult struct {
@@ -120,6 +129,8 @@ type CreatePaymentResult struct {
 
 type QueryPaymentRequest struct {
 	TransactionCode, ProviderRef string
+	// CreatedAt là thời điểm tạo giao dịch, đúng giá trị đã gửi ở CreatePayment/Charge.
+	CreatedAt time.Time
 }
 
 type PaymentStatus struct {
@@ -175,6 +186,8 @@ type ChargeRequest struct {
 	Customer                        paykit.Customer
 	ReturnURL, CancelURL, ClientIP  string
 	Metadata                        map[string]string
+	// CreatedAt là thời điểm tạo giao dịch.
+	CreatedAt time.Time
 }
 
 type ChargeResult struct {
@@ -189,6 +202,8 @@ type ChargeResult struct {
 
 type CancelRequest struct {
 	TransactionCode, ProviderRef, IdempotencyKey string
+	// CreatedAt là thời điểm tạo giao dịch, đúng giá trị đã gửi ở CreatePayment/Charge.
+	CreatedAt time.Time
 }
 
 type CancelResult struct {
@@ -201,6 +216,8 @@ type RefundRequest struct {
 	RefundCode, IdempotencyKey, TransactionCode, ProviderRef string
 	Money                                                    paykit.Money
 	Reason, CustomerID                                       string
+	// TransactionCreatedAt là thời điểm tạo giao dịch gốc (như ở CreatePayment); CreatedAt là thời điểm tạo lệnh hoàn.
+	TransactionCreatedAt, CreatedAt time.Time
 }
 
 type RefundResult struct {
@@ -211,6 +228,8 @@ type RefundResult struct {
 
 type QueryRefundRequest struct {
 	RefundCode, ProviderRef, TransactionCode string
+	// CreatedAt là thời điểm tạo lệnh hoàn, TransactionCreatedAt của giao dịch gốc; đúng giá trị đã gửi ở CreateRefund.
+	CreatedAt, TransactionCreatedAt time.Time
 }
 
 type RefundStatus struct {

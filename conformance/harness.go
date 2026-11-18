@@ -55,6 +55,13 @@ type RequestCounter interface {
 	BusinessRequests() int
 }
 
+// RequestRecorder là phần tuỳ chọn của Partner: mã đơn (mã giao dịch phía đối tác, như connector đặt trong
+// request) của mọi lệnh tạo thanh toán đối tác giả đã NHẬN, theo thứ tự nhận. Partner cài nó thì ID-4 kiểm được
+// connector dựng mã tất định từ TransactionCode + CreatedAt; không cài thì ID-4 bị bỏ.
+type RequestRecorder interface {
+	OrderCodes() []string
+}
+
 // Harness mô tả connector cần kiểm.
 type Harness struct {
 	New    func(tb testing.TB) (connector.Connector, Partner) // mỗi kiểm tra một cặp mới

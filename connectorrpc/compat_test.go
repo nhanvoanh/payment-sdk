@@ -25,6 +25,14 @@ var addedFields = []struct {
 	number  protoreflect.FieldNumber
 }{
 	{"Customer", "address", 5},
+	{"CreatePaymentRequest", "created_at", 10},
+	{"ChargeRequest", "created_at", 10},
+	{"QueryPaymentRequest", "created_at", 3},
+	{"CancelPaymentRequest", "created_at", 4},
+	{"CreateRefundRequest", "transaction_created_at", 8},
+	{"CreateRefundRequest", "created_at", 9},
+	{"QueryRefundRequest", "created_at", 4},
+	{"QueryRefundRequest", "transaction_created_at", 5},
 }
 
 func TestProto_AddedFieldNumbers(t *testing.T) {
@@ -75,7 +83,7 @@ func timestampFile() protoreflect.FileDescriptor {
 func TestProto_OldPeerIgnoresAddedFields(t *testing.T) {
 	old := oldSchema(t)
 	in := connector.CreatePaymentRequest{TransactionCode: "TX1", IdempotencyKey: "idem", Money: paykit.Money{Amount: 1, Currency: "VND"},
-		Method: paykit.MethodQR, Customer: cust}
+		Method: paykit.MethodQR, Customer: cust, CreatedAt: tCreated}
 	b, err := proto.Marshal(connectorrpc.CreatePaymentRequestToProto(in))
 	require.NoError(t, err)
 
@@ -89,11 +97,13 @@ func TestProto_OldPeerIgnoresAddedFields(t *testing.T) {
 
 	// Bên cũ gửi lại (bỏ phần lạ như một bản cài cũ không giữ trường lạ): bên mới đọc ra địa chỉ rỗng.
 	c.SetUnknown(nil)
+	msg.SetUnknown(nil)
 	back, err := proto.Marshal(msg)
 	require.NoError(t, err)
 	var got connectorpb.CreatePaymentRequest
 	require.NoError(t, proto.Unmarshal(back, &got))
 	out := connectorrpc.CreatePaymentRequestFromProto(&got)
 	assert.Empty(t, out.Customer.Address)
+	assert.True(t, out.CreatedAt.IsZero(), "core cũ không gửi thời điểm tạo: zero")
 	assert.Equal(t, cust.Name, out.Customer.Name)
 }

@@ -57,7 +57,7 @@ func checkLOG1(e *env) {
 	}
 	if err == nil && e.ops[connector.OpQueryPayment] {
 		e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
-		st, ok, qerr := e.query(connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: res.ProviderRef})
+		st, ok, qerr := e.query(connector.QueryPaymentRequest{TransactionCode: tx, ProviderRef: res.ProviderRef, CreatedAt: txCreatedAt})
 		if ok {
 			e.expectNoCustomerData("QueryPayment", st.Raw, qerr)
 		}

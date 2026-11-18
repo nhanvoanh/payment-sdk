@@ -7,7 +7,7 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 |---|---|
 | `acme/connector.go` | Các thao tác và chỗ chọn lỗi trả về. Đọc kỹ `send`, `reply`, `tokenError`. |
 | `acme/wire.go` | Hình dạng dữ liệu trên đường dây và đổi qua lại với kiểu của SDK. |
-| `acme/config.go` | `Config` và `ConfigFromEnv` (`ACME_BASE_URL`, `ACME_MERCHANT_ID`, `ACME_SECRET_KEY`, `ACME_TIMEOUT`). |
+| `acme/config.go` | `Config` và `ConfigFromEnv` (`ACME_BASE_URL`, `ACME_MERCHANT_ID`, `ACME_SECRET_KEY`, `ACME_TIMEOUT`, `ACME_TIMEZONE`). |
 | `acme/acmetest/partner.go` | Đối tác giả (máy chủ HTTP thật), cài `conformance.Partner`. |
 | `acme/connector_test.go` | Bộ conformance, các test lỗi/token, và chạy qua mTLS thật. |
 | `cmd/connector/main.go` | Tiến trình: `ConfigFromEnv` → `acme.New` → `connectorsdk.Main`. |
@@ -50,6 +50,12 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 - `POST /v1/payments` → thanh toán `{payment_id, order_code, status, redirect_url, expires_at}`;
   `GET /v1/payments?order_code=` (404 `not_found` nếu không biết); `POST /v1/payments/{id}/cancel`.
   `POST /v1/refunds` và `GET /v1/refunds?refund_code=`. Các lệnh tạo gửi `Idempotency-Key`.
+- `order_code` (mã đơn phía acme) có dạng `yymmdd_<mã giao dịch>`: ngày TẠO giao dịch ở múi giờ `ACME_TIMEZONE`
+  (mặc định UTC), lấy từ `CreatedAt` core gửi — không bao giờ từ `time.Now()` (`orderCode` trong `wire.go`).
+  Truy vấn dựng lại đúng mã từ `QueryPaymentRequest.CreatedAt`, kể cả khi lệnh tạo chưa nghe được trả lời (chưa
+  có `payment_id`); webhook tách `yymmdd_` để trả lại mã giao dịch của core. Đổi `ACME_TIMEZONE` sau khi đã chạy
+  thật thì truy vấn giao dịch cũ dựng sai mã: chỉ đặt một lần. Luật `ID-4` kiểm điều này (`acmetest` cài
+  `conformance.RequestRecorder`).
 - Trạng thái thanh toán: `pending`, `paid`, `failed`, `canceled`; hoàn tiền: `pending`, `refunded`, `failed`.
   Trạng thái lạ là lỗi, không đoán.
 - HTTP: 2xx là kết quả; 4xx kèm `{"error":{"code","message"}}` là từ chối rõ ràng; **401 là từ chối trước khi
@@ -108,8 +114,8 @@ lần ở đây là khách bị trừ tiền hai lần hoặc đơn bị huỷ k
 
 ## Luật conformance
 
-Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã luật: `ID-1`..`ID-3` (tên, phương thức,
-khai năng lực), `PAY-1`..`PAY-7` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
+Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã luật: `ID-1`..`ID-4` (tên, phương thức,
+khai năng lực, mã phía đối tác tất định), `PAY-1`..`PAY-7` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
 từ chối rõ ràng, thân rác, gửi lại cùng khoá), `QRY-1`..`QRY-4` (truy vấn), `CHG-1` (thu ngay), `CXL-1`..`CXL-4` (huỷ: không báo `canceled` khi
 đã thu, khi treo hay thân rác; không đổi đối tác treo thành từ chối, kể cả khi thiếu `ProviderRef`; trả lời dứt khoát khi thiếu `ProviderRef`; đã thu thì trả "đã thu", không từ chối), `WHK-1`..`WHK-6`
 (webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-3` (hoàn tiền), `LOG-1` (vết không chứa dữ liệu khách), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
