@@ -10,12 +10,14 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc/grpctest"
+	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectortest"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
 )
 
@@ -338,37 +340,57 @@ func businessCalls(c *connectorrpc.Client) map[string]error {
 	return out
 }
 
-func TestDescribe_IdentityMismatchQuarantines(t *testing.T) {
-	sd := &switchDescribe{ConnectorServiceServer: connectorrpc.NewServer(newFake())}
-	sd.name.Store("acme")
-	var rpcs atomic.Int32 // mọi RPC trừ Describe tới được server
-	srv := grpctest.New(t, sd, grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+// moneyOps là các RPC tiền/truy vấn: khi chắc chắn chưa gửi phải là ErrProviderUnavailable; Parse* là ErrUnknownOutcome.
+var moneyOps = map[string]bool{"create": true, "charge": true, "query": true, "cancel": true, "refund": true, "query_refund": true}
+
+func assertNotSentErrors(t *testing.T, errs map[string]error) {
+	t.Helper()
+	for op, err := range errs {
+		if moneyOps[op] {
+			if !errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) {
+				t.Errorf("%s: muốn ErrProviderUnavailable (chưa gửi), có %v", op, err)
+			}
+		} else if !errors.Is(err, connector.ErrUnknownOutcome) {
+			t.Errorf("%s: muốn ErrUnknownOutcome (đối tác gửi lại), có %v", op, err)
+		}
+	}
+}
+
+// countingServer đếm RPC trừ Describe tới được server.
+func countingServer(n *atomic.Int32) grpc.ServerOption {
+	return grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 		if !strings.HasSuffix(info.FullMethod, "/Describe") {
-			rpcs.Add(1)
+			n.Add(1)
 		}
 		return h(ctx, req)
-	}))
+	})
+}
+
+func TestQuarantine_KeepsDescriptionAndBlocksCalls(t *testing.T) {
+	sd := &switchDescribe{ConnectorServiceServer: connectorrpc.NewServer(newFake())}
+	sd.name.Store("acme")
+	var rpcs atomic.Int32
+	srv := grpctest.New(t, sd, countingServer(&rpcs))
 	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
 	if _, err := c.Describe(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	sd.name.Store("other")
-	_, err := c.Describe(context.Background())
-	if !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+	if _, err := c.Describe(context.Background()); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
 		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
 	}
-	if c.Described() || len(c.Methods()) != 0 || c.Supports(connector.OpRefund) || c.Supports(connector.OpWebhook) {
-		t.Fatal("cách ly: Described/Methods/Supports phải rỗng")
+	if !c.Quarantined() {
+		t.Fatal("phải bị cách ly")
 	}
-	if st, _, _ := c.AckWebhook(connector.OutcomeApplied); st != 500 {
-		t.Errorf("ack khi cách ly phải 500, có %d", st)
+	// Mô tả hợp lệ cuối được giữ: use case không được hiểu nhầm "đối tác không có năng lực".
+	if !c.Described() || len(c.Methods()) != 1 || !c.Supports(connector.OpRefund) || !c.Supports(connector.OpQueryPayment) {
+		t.Fatalf("cách ly phải giữ mô tả: described=%v methods=%v", c.Described(), c.Methods())
 	}
-	for op, err := range businessCalls(c) {
-		if !errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) {
-			t.Errorf("%s khi cách ly: muốn ErrProviderUnavailable (chưa gửi), có %v", op, err)
-		}
+	if st, _, _ := c.AckWebhook(connector.OutcomeApplied); st != 200 {
+		t.Errorf("ack giữ theo mô tả cũ, có %d", st)
 	}
+	assertNotSentErrors(t, businessCalls(c))
 	if n := rpcs.Load(); n != 0 {
 		t.Fatalf("cách ly mà vẫn có %d RPC tới server", n)
 	}
@@ -377,7 +399,7 @@ func TestDescribe_IdentityMismatchQuarantines(t *testing.T) {
 	if _, err := c.Describe(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !c.Described() || !c.Supports(connector.OpRefund) {
+	if c.Quarantined() {
 		t.Fatal("Describe đúng lại phải gỡ cách ly")
 	}
 	if err := create(context.Background(), c); err != nil {
@@ -388,7 +410,7 @@ func TestDescribe_IdentityMismatchQuarantines(t *testing.T) {
 	}
 }
 
-func TestDescribe_ProtocolMismatchQuarantines(t *testing.T) {
+func TestQuarantine_ProtocolMismatchBeforeAnyDescription(t *testing.T) {
 	resp := &connectorpb.DescribeResponse{ProtocolVersion: connectorrpc.ProtocolVersion + 1, Name: "acme", Methods: []string{"qr"}}
 	f := newFake()
 	srv := grpctest.New(t, fakeDescribe{connectorrpc.NewServer(f), resp})
@@ -396,11 +418,136 @@ func TestDescribe_ProtocolMismatchQuarantines(t *testing.T) {
 	if _, err := c.Describe(context.Background()); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
 		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
 	}
+	if !c.Quarantined() || c.Described() || len(c.Methods()) != 0 {
+		t.Fatal("chưa từng có mô tả hợp lệ: cách ly và mô tả rỗng")
+	}
 	if err := create(context.Background(), c); !errors.Is(err, connector.ErrProviderUnavailable) {
 		t.Fatalf("muốn ErrProviderUnavailable, có %v", err)
 	}
 	if f.Calls("create") != 0 {
 		t.Fatal("cách ly mà lệnh tạo vẫn tới connector")
+	}
+}
+
+// Đua: lời gọi đã qua lần kiểm cờ đầu và đang chờ kết nối thì bị cách ly; lần đọc lại ngay trước khi gửi chặn nó.
+func TestQuarantine_SetWhileWaitingReadyBlocksSend(t *testing.T) {
+	var rpcs atomic.Int32
+	srv := grpctest.New(t, connectorrpc.NewServer(newFake()), countingServer(&rpcs))
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if _, err := c.Describe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	connectorrpc.SetAfterReady(c, func() { connectorrpc.Quarantine(c) })
+	if err := create(context.Background(), c); !errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) {
+		t.Fatalf("muốn ErrProviderUnavailable, có %v", err)
+	}
+	if rpcs.Load() != 0 {
+		t.Fatal("bị cách ly trước khi gửi mà vẫn gửi")
+	}
+}
+
+// Lời gọi đang bay lúc phát hiện sai danh tính: tiến trình trả lời "thành công" nhưng không được tin.
+func TestQuarantine_InFlightResponseIsUnknown(t *testing.T) {
+	f := newFake()
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.OnCreate = func(context.Context, connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+		close(entered)
+		<-release
+		return connector.CreatePaymentResult{ProviderRef: "r", Status: connector.StatusPending,
+			NextAction: paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.example/T"}}, nil
+	}
+	sd := &switchDescribe{ConnectorServiceServer: connectorrpc.NewServer(f)}
+	sd.name.Store("acme")
+	srv := grpctest.New(t, sd)
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if _, err := c.Describe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- create(context.Background(), c) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("lệnh tạo không tới server")
+	}
+	sd.name.Store("other")
+	if _, err := c.Describe(context.Background()); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn ErrIdentityMismatch, có %v", err)
+	}
+	// Gỡ cách ly trước khi phản hồi về: cờ đã sạch nhưng thế hệ đã đổi, phản hồi vẫn không được tin.
+	sd.name.Store("acme")
+	if _, err := c.Describe(context.Background()); err != nil || c.Quarantined() {
+		t.Fatalf("Describe đúng phải gỡ cách ly: %v", err)
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, connector.ErrUnknownOutcome) {
+			t.Fatalf("phản hồi về sau khi cách ly phải là chưa rõ, có %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("lệnh tạo không trả về")
+	}
+}
+
+// Server biết tên mình: từ chối trước handler, proxy tự cách ly mà không cần Describe.
+func TestIdentity_ServerRejectsBeforeHandler(t *testing.T) {
+	f := connectortest.New("other", paykit.MethodQR)
+	srv := grpctest.New(t, connectorrpc.NewServer(f), grpc.UnaryInterceptor(connectorrpc.IdentityInterceptor("other")))
+
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	err := create(context.Background(), c)
+	if !errors.Is(err, connector.ErrProviderUnavailable) || errors.Is(err, connector.ErrUnknownOutcome) || !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("muốn ErrProviderUnavailable + ErrIdentityMismatch, có %v", err)
+	}
+	if !c.Quarantined() {
+		t.Fatal("proxy phải tự cách ly khi server báo sai tên")
+	}
+	if f.Calls("create") != 0 {
+		t.Fatal("handler không được chạy")
+	}
+
+	p := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if _, err := p.ParseWebhook(context.Background(), connector.RawWebhook{Body: []byte("{}")}); !errors.Is(err, connector.ErrUnknownOutcome) {
+		t.Fatalf("Parse* bị từ chối vì sai tên: muốn ErrUnknownOutcome, có %v", err)
+	}
+	d := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if _, err := d.Describe(context.Background()); !errors.Is(err, connectorrpc.ErrIdentityMismatch) {
+		t.Fatalf("Describe bị server từ chối: muốn ErrIdentityMismatch, có %v", err)
+	}
+	if len(f.CallLog()) != 0 {
+		t.Fatalf("không handler nào được chạy: %v", f.CallLog())
+	}
+
+	// Đúng tên thì qua; client không gửi metadata (bản cũ) cũng qua.
+	ok := connectorrpc.NewClient("other", srv.Conn, connectorrpc.ClientOptions{})
+	if err := create(context.Background(), ok); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connectorpb.NewConnectorServiceClient(srv.Conn).CreatePayment(context.Background(), &connectorpb.CreatePaymentRequest{}); err != nil {
+		t.Fatalf("client không gửi metadata phải gọi được: %v", err)
+	}
+	if f.Calls("create") != 2 {
+		t.Fatalf("muốn 2 lệnh tạo, có %d", f.Calls("create"))
+	}
+}
+
+// FailedPrecondition không có dấu của server SDK vẫn là chưa rõ, và không cách ly.
+func TestIdentity_FailedPreconditionWithoutMarkIsUnknown(t *testing.T) {
+	srv := grpctest.New(t, connectorrpc.NewServer(newFake()), grpc.UnaryInterceptor(
+		func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+			if strings.HasSuffix(info.FullMethod, "/CreatePayment") {
+				_ = grpc.SetTrailer(ctx, metadata.Pairs(connectorrpc.MetadataIdentity, "something-else"))
+				return nil, status.Error(codes.FailedPrecondition, "lý do khác")
+			}
+			return h(ctx, req)
+		}))
+	c := connectorrpc.NewClient("acme", srv.Conn, connectorrpc.ClientOptions{})
+	if err := create(context.Background(), c); !errors.Is(err, connector.ErrUnknownOutcome) {
+		t.Fatalf("muốn ErrUnknownOutcome, có %v", err)
+	}
+	if c.Quarantined() {
+		t.Fatal("không có dấu thì không cách ly")
 	}
 }
 

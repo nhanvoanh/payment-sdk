@@ -107,8 +107,10 @@ func ServeListener(ctx context.Context, c connector.Connector, o Options, lis ne
 	}
 	opts := []grpc.ServerOption{
 		grpc.MaxConcurrentStreams(streams),
-		// Thứ tự: log ngoài cùng để thấy cả lời gọi bị từ chối và panic đã thành Internal.
-		grpc.ChainUnaryInterceptor(logInterceptor(log), authInterceptor(log, o.TLS != nil, allowed), recoverInterceptor(log)),
+		// Thứ tự: log ngoài cùng để thấy cả lời gọi bị từ chối và panic đã thành Internal. Kiểm tên chạy sau
+		// chứng chỉ và trước handler: core gọi nhầm tiến trình thì lời gọi bị từ chối khi chưa chạm connector.
+		grpc.ChainUnaryInterceptor(logInterceptor(log), authInterceptor(log, o.TLS != nil, allowed),
+			connectorrpc.IdentityInterceptor(c.Name()), recoverInterceptor(log)),
 	}
 	if o.TLS != nil {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(o.TLS)))

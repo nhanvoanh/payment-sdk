@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
@@ -373,3 +374,28 @@ func TestServe_ShutdownGraceForcesStop(t *testing.T) {
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func newLogger(w *syncBuf) *slog.Logger { return slog.New(slog.NewTextHandler(w, nil)) }
+
+// Tên trong metadata khác tên connector: từ chối trước handler, có dấu để proxy biết chắc chưa xử lý. Health không bị kiểm.
+func TestServe_RejectsWrongConnectorNameBeforeHandler(t *testing.T) {
+	f := newFake()
+	r, _, cliCfg := mtlsEnv(t, f, nil, "cli.test")
+	conn := dial(t, r.addr, credentials.NewTLS(cliCfg))
+	cl := connectorpb.NewConnectorServiceClient(conn)
+
+	var trailer metadata.MD
+	wrong := metadata.AppendToOutgoingContext(ctx5(t), connectorrpc.MetadataConnectorName, "beta")
+	_, err := cl.CreatePayment(wrong, createReq(), grpc.Trailer(&trailer))
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, []string{connectorrpc.IdentityMismatch}, trailer.Get(connectorrpc.MetadataIdentity))
+	require.Equal(t, 0, f.Calls("create"), "handler không được chạy")
+
+	_, err = grpc_health_v1.NewHealthClient(conn).Check(wrong, &grpc_health_v1.HealthCheckRequest{})
+	require.NoError(t, err, "health không bị kiểm tên")
+
+	right := metadata.AppendToOutgoingContext(ctx5(t), connectorrpc.MetadataConnectorName, "acme")
+	_, err = cl.CreatePayment(right, createReq())
+	require.NoError(t, err)
+	_, err = cl.CreatePayment(ctx5(t), createReq()) // client cũ không gửi metadata
+	require.NoError(t, err)
+	require.Equal(t, 2, f.Calls("create"))
+}

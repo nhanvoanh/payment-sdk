@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
 	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
@@ -30,9 +34,18 @@ type ClientOptions struct {
 	ReadyWait time.Duration
 }
 
-// ErrIdentityMismatch: Describe nhận được phản hồi nhưng tên hoặc phiên bản giao thức không khớp, tức địa chỉ
-// đang trỏ tới một tiến trình khác. Client khi đó bị cách ly cho tới lần Describe thành công sau.
+// ErrIdentityMismatch: tiến trình ở địa chỉ này không phải connector đã cấu hình — Describe trả tên hoặc phiên
+// bản giao thức khác, hoặc server từ chối lời gọi vì tên trong metadata không khớp. Client bị cách ly cho tới
+// lần Describe thành công sau.
 var ErrIdentityMismatch = errors.New("connectorrpc: connector ở địa chỉ này không phải connector đã cấu hình")
+
+const (
+	// MetadataConnectorName là khoá metadata proxy gửi kèm MỌI RPC: tên connector mà core mong gặp.
+	MetadataConnectorName = "x-connector-name"
+	// MetadataIdentity là khoá trailer server đặt khi từ chối vì sai tên; giá trị IdentityMismatch.
+	MetadataIdentity = "x-connector-identity"
+	IdentityMismatch = "mismatch"
+)
 
 // Description là những gì connector ở xa khai ở Describe.
 type Description struct {
@@ -59,9 +72,18 @@ type ackResp struct {
 // gửi) hoặc khi connector nói rõ trong thân phản hồi. Đã gọi RPC mà lỗi (kể cả codes.Unavailable) là
 // ErrUnknownOutcome. Không dùng WaitForReady và không bật retry của gRPC.
 //
-// Cách ly: Describe trả tên hoặc phiên bản giao thức sai thì mô tả bị xoá (Described, Supports, Methods đều
-// rỗng) và mọi RPC nghiệp vụ trả ErrProviderUnavailable mà không gửi, vì tiến trình bên kia không phải
-// connector đã cấu hình. Lỗi vận chuyển ở Describe không cách ly và giữ mô tả cũ.
+// Ngoại lệ duy nhất của "mã gRPC khác OK là chưa rõ": codes.FailedPrecondition KÈM trailer
+// MetadataIdentity=IdentityMismatch. Server của SDK chỉ trả cặp đó khi tên trong metadata khác tên của nó, và
+// trả TRƯỚC khi gọi handler, nên lời gọi chắc chắn chưa được xử lý: thao tác tiền/truy vấn nhận
+// ErrProviderUnavailable, Parse* nhận ErrUnknownOutcome. FailedPrecondition không có dấu đó vẫn là chưa rõ.
+//
+// Cách ly: Describe trả sai tên/phiên bản, hoặc server từ chối vì sai tên, thì Client bị cách ly. Mô tả hợp lệ
+// cuối cùng được GIỮ (Supports/Methods/AckWebhook không đổi, để use case không hiểu nhầm "không có năng lực");
+// mọi RPC nghiệp vụ trả lỗi chưa gửi (tiền/truy vấn: ErrProviderUnavailable; Parse*: ErrUnknownOutcome).
+// Lời gọi đã gửi trước khi cách ly mà phản hồi về sau đó thì phản hồi bị bỏ, trả ErrUnknownOutcome. Lần
+// Describe đúng sau đó gỡ cách ly. Lỗi vận chuyển ở Describe không cách ly và giữ mô tả cũ.
+//
+// Describe được tuần tự hoá bằng khoá riêng; các RPC khác gọi đồng thời được.
 type Client struct {
 	name        string
 	conn        *grpc.ClientConn
@@ -69,6 +91,9 @@ type Client struct {
 	opts        ClientOptions
 	desc        atomic.Pointer[described]
 	quarantined atomic.Bool
+	gen         atomic.Uint64 // tăng mỗi lần cách ly; phản hồi của lời gọi chụp thế hệ cũ không được tin
+	describeMu  sync.Mutex
+	afterReady  func() // chỉ cho test: chạy sau waitReady, trước lần đọc lại cờ cách ly
 }
 
 // NewClient tạo proxy cho connector tên name. Chưa mô tả: gọi Describe trước khi dùng.
@@ -116,12 +141,14 @@ func (c *Client) waitReady(ctx context.Context) bool {
 	}
 }
 
-// invoke gọi một RPC. notSent là lỗi trả khi kết nối không READY (chắc chắn chưa gửi); mọi lỗi sau khi
-// đã gọi là ErrUnknownOutcome, giữ nguyên văn lỗi gRPC.
-func (c *Client) invoke(ctx context.Context, method string, notSent error, send func(ctx context.Context) error) error {
-	if method != "Describe" && c.quarantined.Load() {
-		return fmt.Errorf("%w: %s: connector đang bị cách ly vì Describe trả sai danh tính, chưa gửi",
-			connector.ErrProviderUnavailable, method)
+const describeRPC = "Describe"
+
+// invoke gọi một RPC. notSent là lỗi trả khi chắc chắn chưa gửi (kết nối không READY, đang cách ly, hoặc server
+// từ chối vì sai tên trước handler); mọi lỗi khác sau khi đã gọi là ErrUnknownOutcome, giữ nguyên văn lỗi gRPC.
+func (c *Client) invoke(ctx context.Context, method string, notSent error, send func(ctx context.Context, opts ...grpc.CallOption) error) error {
+	business := method != describeRPC
+	if business && c.quarantined.Load() {
+		return c.refuseQuarantined(method, notSent)
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -131,17 +158,54 @@ func (c *Client) invoke(ctx context.Context, method string, notSent error, send 
 	if !c.waitReady(ctx) {
 		return fmt.Errorf("%w: %s: kết nối chưa sẵn sàng, chưa gửi", notSent, method)
 	}
-	if err := send(ctx); err != nil {
+	if c.afterReady != nil {
+		c.afterReady()
+	}
+	// Chụp thế hệ TRƯỚC khi đọc lại cờ: cách ly xảy ra sau lần đọc này sẽ làm thế hệ đổi và phản hồi bị bỏ.
+	gen := c.gen.Load()
+	if business && c.quarantined.Load() {
+		return c.refuseQuarantined(method, notSent)
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, MetadataConnectorName, c.name)
+	var trailer metadata.MD
+	if err := send(ctx, grpc.Trailer(&trailer)); err != nil {
+		if identityRejected(err, trailer) {
+			c.quarantine()
+			return fmt.Errorf("%w: %s: %w: server từ chối trước khi xử lý: %v", notSent, method, ErrIdentityMismatch, err)
+		}
 		return fmt.Errorf("%w: %s: %v", connector.ErrUnknownOutcome, method, err)
+	}
+	if business && (c.gen.Load() != gen || c.quarantined.Load()) {
+		return fmt.Errorf("%w: %s: connector bị cách ly trong lúc lời gọi đang bay; bỏ phản hồi của tiến trình không đáng tin",
+			connector.ErrUnknownOutcome, method)
 	}
 	return nil
 }
 
-// Describe gọi RPC, kiểm phiên bản và tên rồi lưu nguyên tử. Lỗi thì không lưu gì.
+func (c *Client) refuseQuarantined(method string, notSent error) error {
+	return fmt.Errorf("%w: %s: %w: connector đang bị cách ly, chưa gửi", notSent, method, ErrIdentityMismatch)
+}
+
+// identityRejected: đúng cặp FailedPrecondition + trailer đánh dấu của server SDK; thiếu một trong hai là chưa rõ.
+func identityRejected(err error, trailer metadata.MD) bool {
+	if status.Code(err) != codes.FailedPrecondition {
+		return false
+	}
+	for _, v := range trailer.Get(MetadataIdentity) {
+		if v == IdentityMismatch {
+			return true
+		}
+	}
+	return false
+}
+
+// Describe gọi RPC, kiểm phiên bản và tên rồi lưu nguyên tử. Lỗi thì không lưu gì; sai danh tính thì cách ly.
 func (c *Client) Describe(ctx context.Context) (Description, error) {
+	c.describeMu.Lock()
+	defer c.describeMu.Unlock()
 	var resp *connectorpb.DescribeResponse
-	err := c.invoke(ctx, "Describe", connector.ErrProviderUnavailable, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.Describe(ctx, &connectorpb.DescribeRequest{})
+	err := c.invoke(ctx, describeRPC, connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.Describe(ctx, &connectorpb.DescribeRequest{}, opts...)
 		return e
 	})
 	if err != nil {
@@ -184,11 +248,14 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 	return d.copyOut(), nil
 }
 
-// quarantine chặn RPC nghiệp vụ trước rồi mới xoá mô tả, để không lời gọi nào thấy "chưa cách ly" sau khi mô tả đã mất.
+// quarantine tăng thế hệ rồi đặt cờ; mô tả hợp lệ cuối cùng được giữ.
 func (c *Client) quarantine() {
+	c.gen.Add(1)
 	c.quarantined.Store(true)
-	c.desc.Store(nil)
 }
+
+// Quarantined: tiến trình ở địa chỉ này đã tự nhận là connector khác; mọi RPC nghiệp vụ bị chặn.
+func (c *Client) Quarantined() bool { return c.quarantined.Load() }
 
 func (d *described) copyOut() Description {
 	out := Description{Name: d.Name, Methods: append([]paykit.Method(nil), d.Methods...), Operations: map[connector.Operation]bool{}}
@@ -198,7 +265,7 @@ func (d *described) copyOut() Description {
 	return out
 }
 
-// Described cho biết đã Describe thành công chưa.
+// Described cho biết đã từng có mô tả hợp lệ (vẫn đúng khi đang cách ly).
 func (c *Client) Described() bool { return c.desc.Load() != nil }
 
 func (c *Client) Name() string { return c.name }
@@ -232,8 +299,8 @@ func (c *Client) AckWebhook(outcome connector.WebhookOutcome) (int, []byte, stri
 
 func (c *Client) CreatePayment(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
 	var resp *connectorpb.CreatePaymentResponse
-	if err := c.invoke(ctx, "CreatePayment", connector.ErrProviderUnavailable, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.CreatePayment(ctx, CreatePaymentRequestToProto(req))
+	if err := c.invoke(ctx, "CreatePayment", connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.CreatePayment(ctx, CreatePaymentRequestToProto(req), opts...)
 		return e
 	}); err != nil {
 		return connector.CreatePaymentResult{}, err
@@ -243,8 +310,8 @@ func (c *Client) CreatePayment(ctx context.Context, req connector.CreatePaymentR
 
 func (c *Client) Charge(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
 	var resp *connectorpb.ChargeResponse
-	if err := c.invoke(ctx, "Charge", connector.ErrProviderUnavailable, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.Charge(ctx, ChargeRequestToProto(req))
+	if err := c.invoke(ctx, "Charge", connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.Charge(ctx, ChargeRequestToProto(req), opts...)
 		return e
 	}); err != nil {
 		return connector.ChargeResult{}, err
@@ -254,8 +321,8 @@ func (c *Client) Charge(ctx context.Context, req connector.ChargeRequest) (conne
 
 func (c *Client) QueryPayment(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
 	var resp *connectorpb.QueryPaymentResponse
-	if err := c.invoke(ctx, "QueryPayment", connector.ErrProviderUnavailable, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.QueryPayment(ctx, QueryPaymentRequestToProto(req))
+	if err := c.invoke(ctx, "QueryPayment", connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.QueryPayment(ctx, QueryPaymentRequestToProto(req), opts...)
 		return e
 	}); err != nil {
 		return connector.PaymentStatus{}, err
@@ -265,8 +332,8 @@ func (c *Client) QueryPayment(ctx context.Context, req connector.QueryPaymentReq
 
 func (c *Client) CancelPayment(ctx context.Context, req connector.CancelRequest) (connector.CancelResult, error) {
 	var resp *connectorpb.CancelPaymentResponse
-	if err := c.invoke(ctx, "CancelPayment", connector.ErrProviderUnavailable, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.CancelPayment(ctx, CancelRequestToProto(req))
+	if err := c.invoke(ctx, "CancelPayment", connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.CancelPayment(ctx, CancelRequestToProto(req), opts...)
 		return e
 	}); err != nil {
 		return connector.CancelResult{}, err
@@ -276,8 +343,8 @@ func (c *Client) CancelPayment(ctx context.Context, req connector.CancelRequest)
 
 func (c *Client) CreateRefund(ctx context.Context, req connector.RefundRequest) (connector.RefundResult, error) {
 	var resp *connectorpb.CreateRefundResponse
-	if err := c.invoke(ctx, "CreateRefund", connector.ErrProviderUnavailable, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.CreateRefund(ctx, RefundRequestToProto(req))
+	if err := c.invoke(ctx, "CreateRefund", connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.CreateRefund(ctx, RefundRequestToProto(req), opts...)
 		return e
 	}); err != nil {
 		return connector.RefundResult{}, err
@@ -287,8 +354,8 @@ func (c *Client) CreateRefund(ctx context.Context, req connector.RefundRequest) 
 
 func (c *Client) QueryRefund(ctx context.Context, req connector.QueryRefundRequest) (connector.RefundStatus, error) {
 	var resp *connectorpb.QueryRefundResponse
-	if err := c.invoke(ctx, "QueryRefund", connector.ErrProviderUnavailable, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.QueryRefund(ctx, QueryRefundRequestToProto(req))
+	if err := c.invoke(ctx, "QueryRefund", connector.ErrProviderUnavailable, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.QueryRefund(ctx, QueryRefundRequestToProto(req), opts...)
 		return e
 	}); err != nil {
 		return connector.RefundStatus{}, err
@@ -308,8 +375,8 @@ func (c *Client) ParseWebhook(ctx context.Context, raw connector.RawWebhook) (co
 		return connector.ProviderEvent{}, errWebhookTooLarge(len(raw.Body))
 	}
 	var resp *connectorpb.ParseWebhookResponse
-	if err := c.invoke(ctx, "ParseWebhook", connector.ErrUnknownOutcome, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.ParseWebhook(ctx, &connectorpb.ParseWebhookRequest{Raw: RawWebhookToProto(raw)})
+	if err := c.invoke(ctx, "ParseWebhook", connector.ErrUnknownOutcome, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.ParseWebhook(ctx, &connectorpb.ParseWebhookRequest{Raw: RawWebhookToProto(raw)}, opts...)
 		return e
 	}); err != nil {
 		return connector.ProviderEvent{}, err
@@ -323,8 +390,8 @@ func (c *Client) ParseRedirect(ctx context.Context, raw connector.RawWebhook) (c
 		return connector.ProviderEvent{}, errWebhookTooLarge(len(raw.Body))
 	}
 	var resp *connectorpb.ParseRedirectResponse
-	if err := c.invoke(ctx, "ParseRedirect", connector.ErrUnknownOutcome, func(ctx context.Context) (e error) {
-		resp, e = c.rpc.ParseRedirect(ctx, &connectorpb.ParseRedirectRequest{Raw: RawWebhookToProto(raw)})
+	if err := c.invoke(ctx, "ParseRedirect", connector.ErrUnknownOutcome, func(ctx context.Context, opts ...grpc.CallOption) (e error) {
+		resp, e = c.rpc.ParseRedirect(ctx, &connectorpb.ParseRedirectRequest{Raw: RawWebhookToProto(raw)}, opts...)
 		return e
 	}); err != nil {
 		return connector.ProviderEvent{}, err
