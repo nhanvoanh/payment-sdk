@@ -1711,7 +1711,7 @@ func TestCheck_ID5_DatelessConnectorPasses(t *testing.T) {
 func TestCheck_LateAnswerPastLimitIsNotRead(t *testing.T) {
 	t.Parallel()
 	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
-		good := f.OnCreate
+		good, goodQuery, goodParse := f.OnCreate, f.OnQuery, f.OnParseWebhook
 		f.OnCreate = func(ctx context.Context, req connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
 			if p.currentMode() == conformance.ModeHang {
 				time.Sleep(2600 * time.Millisecond) // quá 300 ms + 2 s của luật treo, rồi mới trả lời
@@ -1719,10 +1719,26 @@ func TestCheck_LateAnswerPastLimitIsNotRead(t *testing.T) {
 			}
 			return good(ctx, req)
 		}
+		// Hai ca dưới phủ (*env).query và (*env).parse (lời gọi thường, hạn 5 s + 1 s): bỏ đi thì bản query/parse
+		// đọc biến do goroutine bị bỏ mặc ghi không còn test nào bắt.
+		f.OnQuery = func(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
+			if strings.Contains(req.TransactionCode, "QRY1") {
+				time.Sleep(6300 * time.Millisecond) // quá hạn 5 s + 1 s của lời gọi thường
+				return connector.PaymentStatus{Found: true}, errors.New("trễ")
+			}
+			return goodQuery(ctx, req)
+		}
+		f.OnParseWebhook = func(ctx context.Context, raw connector.RawWebhook) (connector.ProviderEvent, error) {
+			if strings.Contains(string(raw.Body), "CFWHK1") {
+				time.Sleep(6300 * time.Millisecond)
+				return connector.ProviderEvent{EventID: "trễ"}, errors.New("trễ")
+			}
+			return goodParse(ctx, raw)
+		}
 		return f
 	}))
 	got := rules(r)
-	for _, want := range []string{"PAY-4"} {
+	for _, want := range []string{"PAY-4", "QRY-1", "WHK-1"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("Check không bắt được %s:%s", want, dump(r))
 		}
