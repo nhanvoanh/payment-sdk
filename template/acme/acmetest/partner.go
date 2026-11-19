@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -60,23 +61,24 @@ type customerJSON struct {
 
 // Partner an toàn cho nhiều goroutine. Mọi trạng thái nằm sau mu.
 type Partner struct {
-	tb   testing.TB
-	srv  *http.Server
-	addr string
-	done chan struct{} // đóng khi test xong để giải phóng các request ModeHang
+	errorf func(format string, args ...any) // báo lỗi hạ tầng của đối tác giả: tb.Errorf trong test, log khi chạy thành tiến trình
+	srv    *http.Server
+	addr   string
+	done   chan struct{} // đóng khi test xong để giải phóng các request ModeHang
 
-	mu       sync.Mutex
-	lis      net.Listener
-	mode     conformance.Mode
-	tokens   map[string]bool
-	payments map[string]*payment // theo order_code (yymmdd_<mã giao dịch>), như acme thật
-	byTx     map[string]*payment // theo mã giao dịch của core (phần sau "yymmdd_"), cho các hàm của test
-	byID     map[string]*payment
-	orders   []string                // order_code của mọi lệnh tạo hợp lệ đã nhận (conformance.RequestRecorder)
-	refundRx []string                // refund_code của mọi lệnh hoàn hợp lệ đã nhận (conformance.RefundRecorder)
-	refunds  map[string]string       // refund_code -> status
-	refundOf map[string]customerJSON // refund_code -> khách của thanh toán gốc (acme nhắc lại trong phản hồi hoàn)
-	seq      int
+	closeOnce sync.Once
+	mu        sync.Mutex
+	lis       net.Listener
+	mode      conformance.Mode
+	tokens    map[string]bool
+	payments  map[string]*payment // theo order_code (yymmdd_<mã giao dịch>), như acme thật
+	byTx      map[string]*payment // theo mã giao dịch của core (phần sau "yymmdd_"), cho các hàm của test
+	byID      map[string]*payment
+	orders    []string                // order_code của mọi lệnh tạo hợp lệ đã nhận (conformance.RequestRecorder)
+	refundRx  []string                // refund_code của mọi lệnh hoàn hợp lệ đã nhận (conformance.RefundRecorder)
+	refunds   map[string]string       // refund_code -> status
+	refundOf  map[string]customerJSON // refund_code -> khách của thanh toán gốc (acme nhắc lại trong phản hồi hoàn)
+	seq       int
 
 	rejectAuth, failTokens, fail5xx        bool
 	refuseCancel, lagQueries               bool
@@ -91,8 +93,32 @@ func NewPartner(tb testing.TB) *Partner {
 	if err != nil {
 		tb.Fatal(err)
 	}
+	p := newPartner(lis, tb.Errorf)
+	tb.Cleanup(p.Close)
+	return p
+}
+
+// Listen khởi động đối tác giả ở addr ngoài test (cmd/fakepartner, cho compose của người phát triển). Gọi Close
+// để dừng. Chỉ để phát triển cục bộ: thông tin đăng nhập là hằng số công khai (MerchantID, Secret).
+func Listen(addr string) (*Partner, error) {
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return newPartner(lis, func(format string, args ...any) { log.Printf(format, args...) }), nil
+}
+
+// Close dừng máy chủ và giải phóng các request đang treo ở ModeHang.
+func (p *Partner) Close() {
+	p.closeOnce.Do(func() {
+		close(p.done)
+		_ = p.srv.Close()
+	})
+}
+
+func newPartner(lis net.Listener, errorf func(string, ...any)) *Partner {
 	p := &Partner{
-		tb: tb, addr: lis.Addr().String(), lis: lis, done: make(chan struct{}),
+		errorf: errorf, addr: lis.Addr().String(), lis: lis, done: make(chan struct{}),
 		tokens: map[string]bool{}, payments: map[string]*payment{}, byTx: map[string]*payment{}, byID: map[string]*payment{},
 		refunds: map[string]string{}, refundOf: map[string]customerJSON{},
 	}
@@ -105,10 +131,6 @@ func NewPartner(tb testing.TB) *Partner {
 	mux.HandleFunc("GET /v1/refunds", p.business(p.handleQueryRefund))
 	p.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = p.srv.Serve(lis) }()
-	tb.Cleanup(func() {
-		close(p.done)
-		_ = p.srv.Close()
-	})
 	return p
 }
 
@@ -215,7 +237,7 @@ func (p *Partner) SetMode(m conformance.Mode) {
 	case m != conformance.ModeDown && was == conformance.ModeDown:
 		lis, err := net.Listen("tcp", p.addr)
 		if err != nil {
-			p.tb.Errorf("acmetest: không nghe lại được %s: %v", p.addr, err)
+			p.errorf("acmetest: không nghe lại được %s: %v", p.addr, err)
 			return
 		}
 		p.lis = lis
@@ -245,7 +267,7 @@ func (p *Partner) SignedWebhook(tx, ref string, st connector.Status, paid paykit
 func (p *Partner) TamperedWebhook(raw connector.RawWebhook) connector.RawWebhook {
 	var m map[string]any
 	if json.Unmarshal(raw.Body, &m) != nil {
-		p.tb.Errorf("acmetest: thân webhook không phải JSON")
+		p.errorf("acmetest: thân webhook không phải JSON")
 		return raw
 	}
 	m["status"], m["amount_paid"] = "paid", int64(1)
