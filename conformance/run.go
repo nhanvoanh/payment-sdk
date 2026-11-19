@@ -51,6 +51,7 @@ var rules = []rule{
 	{id: "RFD-1", op: connector.OpRefund, check: checkRFD1},
 	{id: "RFD-2", op: connector.OpQueryRefund, check: checkRFD2},
 	{id: "RFD-3", op: connector.OpQueryRefund, check: checkRFD3},
+	{id: "RFD-4", op: connector.OpQueryRefund, alsoOp: connector.OpRefund, check: checkRFD4},
 	{id: "LOG-1", check: checkLOG1},
 	{id: "CTX-1", check: checkCTX1,
 		grpcSkip: "proxy gRPC gặp ctx đã huỷ thì trả về ngay mà không gửi, connector không nhận được lời gọi nào để kiểm"},

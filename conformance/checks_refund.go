@@ -72,3 +72,45 @@ func checkRFD3(e *env) {
 			})
 	}
 }
+
+// checkRFD4: lệnh hoàn đối tác ĐÃ nhận phải tìm được bằng RefundCode + CreatedAt khi core chưa có ProviderRef (core
+// mất kết quả tạo: tiến trình chết sau lời gọi, lần ghi kết quả hỏng). Core chốt failed/not_sent và nhả số tiền
+// đang giữ cho refund còn `new` mà truy vấn trả Found=false, nên "không thấy" chỉ hợp lệ khi đối tác chắc chắn
+// không có lệnh hoàn đó. Không truy vấn được khi thiếu ProviderRef thì trả ErrUnknownOutcome.
+func checkRFD4(e *env) {
+	tx := e.tx()
+	ref, ok := e.createNormal(tx)
+	if !ok {
+		return
+	}
+	e.p.SetPaymentStatus(tx, connector.StatusSucceeded, e.h.Amount)
+	e.p.SetMode(ModeNormal)
+	rf, _ := e.c.(connector.Refunder)
+	q, _ := e.c.(connector.RefundQuerier)
+	code := "R" + tx + "Q"
+	ctx, cancel := normalCtx()
+	defer cancel()
+	var err error
+	if !e.call("CreateRefund", callLimit+time.Second, func() { _, err = rf.CreateRefund(ctx, e.refundReq(tx, ref, code)) }) {
+		return
+	}
+	if err != nil {
+		e.skipf("CreateRefund ở ModeNormal lỗi (%s) nên không kiểm được truy vấn thiếu ProviderRef, xem RFD-1", errText(err))
+		return
+	}
+	var st connector.RefundStatus
+	if !e.call("QueryRefund", callLimit+time.Second, func() {
+		st, err = q.QueryRefund(ctx, connector.QueryRefundRequest{RefundCode: code, TransactionCode: tx,
+			CreatedAt: refundCreatedAt, TransactionCreatedAt: txCreatedAt})
+	}) {
+		return
+	}
+	switch {
+	case err == nil && st.Found, isUnknownForCore(err):
+		return
+	case err == nil:
+		e.fail("QueryRefund (ProviderRef rỗng) cho lệnh hoàn đối tác vừa nhận trả Found false; cần Found true (truy vấn theo mã dựng từ RefundCode + CreatedAt) hoặc ErrUnknownOutcome; core chốt refund failed/not_sent và nhả số tiền trong khi đối tác có thể đã hoàn, khách có thể được hoàn hai lần")
+	default:
+		e.fail("QueryRefund (ProviderRef rỗng) cho lệnh hoàn đối tác vừa nhận trả %v (core hiểu là %s); cần Found true hoặc ErrUnknownOutcome; core không biết đối tác có giữ lệnh hoàn hay không", err, outcomeText(err))
+	}
+}

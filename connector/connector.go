@@ -243,12 +243,21 @@ type RefundResult struct {
 	Raw         RawExchange
 }
 
+// QueryRefundRequest: ProviderRef có thể RỖNG — core truy vấn cả lệnh hoàn mà nó chưa nghe được kết quả tạo
+// (tiến trình chết sau lời gọi, lần ghi kết quả hỏng). Connector phải tìm lệnh hoàn theo mã dựng tất định từ
+// RefundCode + CreatedAt (+ TransactionCreatedAt), đúng mã đã gửi ở CreateRefund (luật ID-4, RFD-4). Connector
+// không truy vấn được khi thiếu ProviderRef thì trả ErrUnknownOutcome (hoặc không khai OpQueryRefund), KHÔNG BAO
+// GIỜ trả Found=false.
 type QueryRefundRequest struct {
 	RefundCode, ProviderRef, TransactionCode string
 	// CreatedAt là thời điểm tạo lệnh hoàn, TransactionCreatedAt của giao dịch gốc; đúng giá trị đã gửi ở CreateRefund.
 	CreatedAt, TransactionCreatedAt time.Time
 }
 
+// RefundStatus: Found=false chỉ khi đối tác CHẮC CHẮN không giữ lệnh hoàn nào dưới mã dựng từ RefundCode + CreatedAt
+// (xem QueryRefundRequest). Core tin câu trả lời đó: refund còn `new` (chưa từng nghe được trả lời của lệnh tạo) từ
+// 30 phút mà truy vấn trả Found=false bị core chốt failed và NHẢ số tiền đang giữ, nên "không thấy" sai cho một lệnh
+// hoàn đối tác đã nhận có thể khiến khách được hoàn hai lần. Không chắc thì trả ErrUnknownOutcome.
 type RefundStatus struct {
 	Found                                      bool
 	Status                                     Status

@@ -154,7 +154,7 @@ Chi tiết và hậu quả từng luật: `conformance/README.md` của SDK. Mã
 khai năng lực, mã phía đối tác tất định, không đoán ngày khi thiếu `CreatedAt`), `PAY-1`..`PAY-8` (tạo thanh toán: kết quả hợp lệ, `ProviderRef`, kết nối bị từ chối, treo,
 từ chối rõ ràng, thân rác, gửi lại cùng khoá, `ExpiresAt` UTC trong khoảng core nhận), `QRY-1`..`QRY-4` (truy vấn), `CHG-1` (thu ngay), `CXL-1`..`CXL-4` (huỷ: không báo `canceled` khi
 đã thu, khi treo hay thân rác; không đổi đối tác treo thành từ chối, kể cả khi thiếu `ProviderRef`; trả lời dứt khoát khi thiếu `ProviderRef`; đã thu thì trả "đã thu", không từ chối), `WHK-1`..`WHK-6`
-(webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-3` (hoàn tiền), `LOG-1` (vết không chứa dữ liệu khách), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
+(webhook: sự kiện, `EventID` ổn định và khác nhau, chữ ký, đầu vào rác, `AckWebhook` thuần), `RFD-1`..`RFD-4` (hoàn tiền), `LOG-1` (vết không chứa dữ liệu khách), `CTX-1` (tôn trọng ctx đã huỷ). Mỗi luật chạy thẳng và qua gRPC (`…/grpc`).
 
 ## Test
 

@@ -118,6 +118,12 @@ func (p *fakePartner) RefundCodes() []string {
 	return append([]string(nil), p.refunds...)
 }
 
+func (p *fakePartner) hasRefund(code string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Contains(p.refunds, code)
+}
+
 func (p *fakePartner) recordRefund(code string) {
 	p.mu.Lock()
 	p.refunds = append(p.refunds, code)
@@ -234,11 +240,15 @@ func newGood(tb testing.TB) (*connectortest.Fake, *fakePartner) {
 		p.recordRefund(req.RefundCode)
 		return connector.RefundResult{ProviderRef: "acme_" + req.RefundCode, Status: connector.StatusPending}, nil
 	}
-	f.OnQueryRefund = func(ctx context.Context, _ connector.QueryRefundRequest) (connector.RefundStatus, error) {
+	f.OnQueryRefund = func(ctx context.Context, req connector.QueryRefundRequest) (connector.RefundStatus, error) {
 		if err := p.call(ctx); err != nil {
 			return connector.RefundStatus{}, err
 		}
-		return connector.RefundStatus{Found: false}, nil
+		// Tra theo mã hoàn (RefundCode), không cần ProviderRef: lệnh hoàn đã nhận luôn tìm được (RFD-4).
+		if !p.hasRefund(req.RefundCode) {
+			return connector.RefundStatus{Found: false}, nil
+		}
+		return connector.RefundStatus{Found: true, Status: connector.StatusPending, ProviderRef: "acme_" + req.RefundCode}, nil
 	}
 	f.OnParseWebhook = func(_ context.Context, raw connector.RawWebhook) (connector.ProviderEvent, error) {
 		var got string
@@ -651,7 +661,7 @@ func TestCheck_SkipsUndeclaredOperations(t *testing.T) {
 		t.Fatalf("thao tác không khai không được sinh finding:%s", dump(r))
 	}
 	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "QRY-4", "CHG-1", "CXL-1", "CXL-2", "CXL-3",
-		"CXL-4", "WHK-1", "WHK-2", "WHK-3", "WHK-4", "WHK-5", "WHK-6", "RFD-1", "RFD-2", "RFD-3"}
+		"CXL-4", "WHK-1", "WHK-2", "WHK-3", "WHK-4", "WHK-5", "WHK-6", "RFD-1", "RFD-2", "RFD-3", "RFD-4"}
 	for _, code := range want {
 		for _, c := range []string{code, code + "/grpc"} {
 			if !slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, c+": ") && len(s) > len(c)+2 }) {
@@ -751,6 +761,41 @@ func TestCheck_Catches_WebhookWrongTransaction(t *testing.T) {
 		return f
 	}))
 	expectBoth(t, r, "WHK-1")
+}
+
+// Connector chỉ truy vấn được theo mã của đối tác nên trả "không thấy" khi ProviderRef rỗng: RFD-4 phải bắt, cả qua
+// gRPC (core sẽ chốt not_sent một lệnh hoàn đối tác đã nhận).
+func TestCheck_Catches_QueryRefundNotFoundWithoutProviderRef(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnQueryRefund
+		f.OnQueryRefund = func(ctx context.Context, req connector.QueryRefundRequest) (connector.RefundStatus, error) {
+			if req.ProviderRef == "" && p.currentMode() == conformance.ModeNormal {
+				return connector.RefundStatus{Found: false}, nil
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	expectBoth(t, r, "RFD-4")
+}
+
+// Không truy vấn được khi thiếu ProviderRef mà trả ErrUnknownOutcome là hợp lệ với RFD-4 (core không chốt gì).
+func TestCheck_QueryRefundUnknownWithoutProviderRef_Passes(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		good := f.OnQueryRefund
+		f.OnQueryRefund = func(ctx context.Context, req connector.QueryRefundRequest) (connector.RefundStatus, error) {
+			if req.ProviderRef == "" && p.hasRefund(req.RefundCode) {
+				return connector.RefundStatus{}, connector.ErrUnknownOutcome
+			}
+			return good(ctx, req)
+		}
+		return f
+	}))
+	if slices.ContainsFunc(r.Findings, func(f conformance.Finding) bool { return strings.HasPrefix(f.Rule, "RFD-4") }) {
+		t.Fatalf("ErrUnknownOutcome không được là vi phạm RFD-4:%s", dump(r))
+	}
 }
 
 func TestCheck_Catches_QueryRefundUnknownAsError(t *testing.T) {
@@ -1887,7 +1932,8 @@ func TestCheck_Catches_OrderCodeWithClockSeconds(t *testing.T) {
 }
 
 // Mã hoàn gửi đối tác lấy thêm đồng hồ (nano giây): hai lần CreateRefund cùng request gửi hai mã khác nhau. ID-4
-// bắt qua RefundRecorder, cả qua gRPC.
+// bắt qua RefundRecorder, cả qua gRPC. Hệ quả của cùng lỗi: đối tác giữ lệnh hoàn dưới mã khác RefundCode nên truy
+// vấn theo RefundCode không thấy, RFD-4 cũng bắn (được phép, không luật nào khác).
 func TestCheck_Catches_RefundCodeFromWallClock(t *testing.T) {
 	t.Parallel()
 	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
@@ -1900,7 +1946,17 @@ func TestCheck_Catches_RefundCodeFromWallClock(t *testing.T) {
 		}
 		return f
 	}))
-	expectBoth(t, r, "ID-4")
+	got := rules(r)
+	for _, want := range []string{"ID-4", "ID-4/grpc"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("Check không bắt được %s; findings:%s", want, dump(r))
+		}
+	}
+	for _, g := range got {
+		if g != "ID-4" && g != "ID-4/grpc" && g != "RFD-4" && g != "RFD-4/grpc" {
+			t.Errorf("luật %s bắn nhầm (chỉ chờ ID-4, cho phép RFD-4):%s", g, dump(r))
+		}
+	}
 }
 
 // noRefundRecorder giấu RefundRecorder của đối tác giả (giữ RequestRecorder).
