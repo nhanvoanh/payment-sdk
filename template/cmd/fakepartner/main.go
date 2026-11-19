@@ -2,9 +2,9 @@
 // triển có đối tác để gọi mà không cần tài khoản thật. CHỈ cho máy phát triển: thông tin đăng nhập là hằng số
 // công khai trong acmetest (merchant M-TEST, secret acme-test-secret), không có TLS.
 //
-// Đây là chỗ DUY NHẤT ngoài file _test.go và ngoài bộ-test được import acmetest (archtest và depguard mở đúng
-// đường dẫn này). Image của nó dựng bằng deploy/compose/Dockerfile.template; image connector của người dùng
-// mẫu (sdk/template/Dockerfile) không chứa nó.
+// Đây là chỗ DUY NHẤT ngoài file _test.go và ngoài bộ-test được import acmetest, và chỉ acmetest: bộ-test khác
+// vẫn bị cấm ở đây (archtest testKitUsers, depguard "fakepartner-kits"). Image của nó dựng bằng
+// deploy/compose/Dockerfile.template; image connector của người dùng mẫu (sdk/template/Dockerfile) không chứa nó.
 package main
 
 import (
