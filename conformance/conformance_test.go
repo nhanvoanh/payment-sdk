@@ -682,6 +682,7 @@ func TestCheck_SkipsUndeclaredOperations(t *testing.T) {
 }
 
 func TestRun_GoodFake(t *testing.T) {
+	t.Parallel()
 	conformance.Run(t, harness(nil))
 }
 
@@ -943,6 +944,7 @@ func TestCheck_Catches_CancelTimeoutClaimsCanceled(t *testing.T) {
 // Connector chỉ huỷ được theo ProviderRef mà báo thiếu mã bằng ErrProviderUnavailable (hay "chưa rõ"):
 // core không bao giờ cho hết hạn giao dịch mà Create chưa nghe được trả lời.
 func TestCheck_Catches_CancelWithoutRefNotDefinite(t *testing.T) {
+	t.Parallel()
 	for name, bad := range map[string]error{
 		"unavailable": fmt.Errorf("%w: thiếu ProviderRef", connector.ErrProviderUnavailable),
 		"unknown":     fmt.Errorf("%w: thiếu ProviderRef", connector.ErrUnknownOutcome),
@@ -986,6 +988,7 @@ func TestCheck_Catches_CancelPaidAsRejected(t *testing.T) {
 // Câu trả lời huỷ cho giao dịch đã thu: "đã thu" (on_hold) hoặc "chưa rõ" qua CXL-4. err nil kèm trạng thái
 // khác (pending, failed) được core xếp chung với RejectedError nên bắn CXL-4, như "chắc chắn chưa xử lý".
 func TestCheck_CancelPaidAnswers(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		res         connector.CancelResult
 		err         error
@@ -1022,6 +1025,7 @@ func TestCheck_CancelPaidAnswers(t *testing.T) {
 // Connector huỷ theo mã giao dịch khi thiếu ProviderRef: gọi đối tác, gặp treo rồi trả "bị từ chối" (chờ hết
 // hạn của luật, hoặc có timeout nội bộ ngắn hơn). Bộ đếm của đối tác giả thấy request đã tới nên bắt được.
 func TestCheck_Catches_CancelWithoutRefHangAsRejected(t *testing.T) {
+	t.Parallel()
 	for name, internal := range map[string]time.Duration{"chờ hết hạn ctx": 0, "timeout nội bộ 20ms": 20 * time.Millisecond} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1082,6 +1086,7 @@ type plainPartner struct{ conformance.Partner }
 
 // Các câu trả lời dứt khoát đều qua CXL-3.
 func TestCheck_CancelWithoutRefDefiniteAnswersPass(t *testing.T) {
+	t.Parallel()
 	for name, ans := range map[string]func() (connector.CancelResult, error){
 		"rejected": func() (connector.CancelResult, error) {
 			return connector.CancelResult{}, &connector.RejectedError{Code: "cannot_cancel"}
@@ -1319,6 +1324,7 @@ func TestCheck_Catches_CancelPendingOnHang(t *testing.T) {
 // Connector gọi đối tác thật, gặp treo hay thân rác thì trả "nil + pending" thay vì ErrUnknownOutcome. Ca "chỉ
 // khi thiếu ProviderRef" chỉ lượt mã rỗng bắt được (bộ đếm thấy request đã tới đối tác).
 func TestCheck_Catches_CancelTimeoutAsPending(t *testing.T) {
+	t.Parallel()
 	for name, onlyWithoutRef := range map[string]bool{"mọi lời huỷ": false, "chỉ khi thiếu ProviderRef": true} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1383,6 +1389,7 @@ func asciiEscaped(s string) string {
 // Connector viết ẩu: đặt dữ liệu khách vào RawExchange ở nhiều dạng, trên từng thao tác. LOG-1 phải bắt
 // mọi ca, cả qua gRPC (RawExchange đi qua dây).
 func TestCheck_Catches_CustomerDataInRaw(t *testing.T) {
+	t.Parallel()
 	leaks := map[string]func(c paykit.Customer) connector.RawExchange{
 		"thô trong request": func(c paykit.Customer) connector.RawExchange {
 			return connector.RawExchange{RequestBody: customerJSON(c)}
@@ -1577,6 +1584,7 @@ func TestCheck_ID4_SkippedWithoutRecorder(t *testing.T) {
 
 // Các thao tác không mang khách nhưng đối tác nhắc lại khách đã gửi lúc tạo: LOG-1 phải bắt từng thao tác.
 func TestCheck_Catches_CustomerEchoedByOtherOperations(t *testing.T) {
+	t.Parallel()
 	type echo struct {
 		mu   sync.Mutex
 		last paykit.Customer
@@ -1802,6 +1810,7 @@ func TestCheck_LateAnswerPastLimitIsNotRead(t *testing.T) {
 // Connector che vết ở nhánh thành công nhưng nhánh LỖI (đối tác từ chối hay trả rác) trả Raw thô còn khách: LOG-1
 // phải bắt, cả qua gRPC (Raw đi qua dây kể cả khi lỗi).
 func TestCheck_Catches_CustomerDataInRawOnError(t *testing.T) {
+	t.Parallel()
 	for _, op := range []string{"create", "charge"} {
 		t.Run(op, func(t *testing.T) {
 			t.Parallel()
@@ -1849,6 +1858,7 @@ func expiryWrap(f func(partnerSet time.Time) time.Time) func(*connectortest.Fake
 
 // ExpiresAt ở quá khứ, sát hiện tại, hay quá 7 ngày: PAY-8 bắt, cả qua gRPC.
 func TestCheck_Catches_ExpiryOutOfRange(t *testing.T) {
+	t.Parallel()
 	for name, f := range map[string]func(time.Time) time.Time{
 		"quá khứ":    func(time.Time) time.Time { return time.Now().Add(-time.Minute).UTC() },
 		"quá 7 ngày": func(time.Time) time.Time { return time.Now().Add(7*24*time.Hour + time.Hour).UTC() },
