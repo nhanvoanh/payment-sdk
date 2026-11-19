@@ -27,7 +27,7 @@ name: payment-connector-dev
 
 services:
   mariadb:
-    image: mariadb:10.11
+    image: mariadb:12.2
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_nopad_bin
@@ -49,7 +49,17 @@ services:
   # Connector của bạn, dựng từ Dockerfile ở thư mục này. Đặt biến môi trường của đối tác (ACME_* trong mẫu; đổi tiền tố
   # sau khi đổi tên) ở đây hoặc qua env_file; KHÔNG commit secret thật.
   connector:
-    build: .
+    # Cần BuildKit (mặc định của Docker Engine 23+ và Docker Desktop) và Docker Compose 2.17+ cho additional_contexts.
+    # Bình thường tải module qua GOPROXY mạng; tầng `gomod` của Dockerfile khi đó là chính thư mục này và không được
+    # đọc. Máy mà container không kiểm được TLS tới proxy module: tải module ở máy chủ (`go mod download`) rồi dựng từ
+    # cache đó, go.sum vẫn kiểm hash (không tắt kiểm TLS hay GOSUMDB):
+    #   GOPROXY=file:///gomod GOMOD_CONTEXT="$(go env GOMODCACHE)/cache/download" docker compose up -d --build ...
+    build:
+      context: .
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+      additional_contexts:
+        gomod: ${GOMOD_CONTEXT:-.}
     environment:
       ACME_BASE_URL: ${ACME_BASE_URL:-https://api.acme.example}
       ACME_MERCHANT_ID: ${ACME_MERCHANT_ID:-}

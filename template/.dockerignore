@@ -1,4 +1,5 @@
 .git
-.env*
-*.pem
-*.key
+# Mẫu bí mật áp ở mọi cấp thư mục (`**/`); không có `**/` thì chỉ khớp ở gốc bối cảnh.
+**/.env*
+**/*.pem
+**/*.key

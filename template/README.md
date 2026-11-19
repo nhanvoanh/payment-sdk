@@ -60,8 +60,12 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
    `method` là phương thức connector của bạn khai; đổi `CONNECTOR_METHOD` nếu không phải `wallet`) ở
    `127.0.0.1:8080` (đổi bằng `PAYMENT_HTTP_PORT`). Chỉ cho máy phát triển (`CONNECTOR_INSECURE=true`). Không có Kafka,
    worker, Redis: file có chú thích cách bật từng thứ. Đặt `ACME_*` (hoặc tiền tố mới của bạn) cho đối tác thật hoặc
-   đối tác giả. Máy mà Docker không kiểm được TLS tới proxy module Go: xem `OFFLINE_MODULES` trong
-   `deploy/compose/README.md` của repo core (`Dockerfile` ở đây có tầng `gomod` tuỳ chọn cho việc đó). Bộ chạy thử
+   đối tác giả. Bước dựng connector cần BuildKit (mặc định từ Docker Engine 23 và trong Docker Desktop) và Docker
+   Compose 2.17 trở lên (`additional_contexts`). Máy mà Docker không kiểm được TLS tới proxy module Go: chạy
+   `go mod download` ở máy chủ rồi dựng từ cache module đó, `go.sum` vẫn kiểm hash:
+   `GOPROXY=file:///gomod GOMOD_CONTEXT="$(go env GOMODCACHE)/cache/download" docker compose up -d --build ...`
+   (đúng cách `make image OFFLINE_MODULES=1` của repo core làm; `Dockerfile` ở đây có tầng `gomod` tuỳ chọn cho việc
+   đó). Không tắt kiểm TLS hay `GOSUMDB`. Bộ chạy thử
    của repo core, `make compose-smoke`, chạy đúng luồng này với connector mẫu và đối tác giả `cmd/fakepartner`
    (chỉ cho phát triển; không có trong image connector của bạn).
 
@@ -165,5 +169,5 @@ từ chối rõ ràng, thân rác, gửi lại cùng khoá, `ExpiresAt` UTC tron
 
 ## Image
 
-`.dockerignore` loại `.git`, `.env*`, `*.pem`, `*.key` khỏi bối cảnh dựng: giữ nguyên và thêm các file bí mật khác của bạn. Không đưa
+`.dockerignore` loại `.git` và `.env*`, `*.pem`, `*.key` ở MỌI cấp thư mục (mẫu `**/`) khỏi bối cảnh dựng: giữ nguyên và thêm các file bí mật khác của bạn. Không đưa
 chứng chỉ hay secret vào image; chúng đến qua biến môi trường và volume lúc chạy.
