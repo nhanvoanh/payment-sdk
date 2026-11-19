@@ -12,6 +12,8 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 | `acme/connector_test.go` | Bộ conformance, các test lỗi/token, và chạy qua mTLS thật. |
 | `cmd/connector/main.go` | Tiến trình: `ConfigFromEnv` → `acme.New` → `connectorsdk.Main`. |
 | `Dockerfile` | Image nhiều tầng, chạy không phải root, chỉ chứa binary. |
+| `cmd/fakepartner/main.go` | Chạy đối tác giả thành tiến trình (chỉ cho phát triển, compose của core). |
+| `docker-compose.yml` | Core + connector của bạn trên máy (bước 6). |
 
 ## Các bước làm connector của bạn
 
@@ -39,8 +41,26 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 
    Chỉ khi phát triển cục bộ mới đặt `CONNECTOR_INSECURE=true` (thay cho ba biến TLS); mặc định là TLS 1.3 và
    bắt buộc chứng chỉ client. `TestAcme_OverMTLS` là ví dụ chạy được của đúng đường này.
-6. **Chưa có trong đợt này:** chạy trọn luồng thanh toán với image của core (core gọi connector của bạn
-   qua mạng) thuộc đợt 4. Hiện chứng minh duy nhất về tương thích là conformance và test mTLS ở trên.
+6. **Chạy trọn luồng với image của core.** `docker-compose.yml` ở thư mục này dựng MariaDB, `migrate`, `serve`
+   (từ image core do đội nền tảng cấp) và connector của bạn (`build: .`), để một request HTTP đi hết đường
+   core → gRPC → connector → đối tác. Đặt ba biến bắt buộc rồi chạy:
+
+   ```
+   export PAYMENT_CORE_IMAGE=<image của core>  CONNECTOR_NAME=<tên connector của bạn>
+   export JWT_KEYS="k1:$(openssl rand -base64 32)"
+   docker compose up -d --build --wait connector mariadb
+   docker compose run --rm migrate && docker compose up -d serve
+   docker compose run --rm -T serve client create --code dev --name Dev --scopes payment:create,payment:read
+   ```
+
+   rồi lấy token (`POST /v1/oauth/token`) và tạo thanh toán (`POST /v1/payments`, header `Idempotency-Key`,
+   `method` là phương thức connector của bạn khai; đổi `CONNECTOR_METHOD` nếu không phải `wallet`) ở
+   `127.0.0.1:8080` (đổi bằng `PAYMENT_HTTP_PORT`). Chỉ cho máy phát triển (`CONNECTOR_INSECURE=true`). Không có Kafka,
+   worker, Redis: file có chú thích cách bật từng thứ. Đặt `ACME_*` (hoặc tiền tố mới của bạn) cho đối tác thật hoặc
+   đối tác giả. Máy mà Docker không kiểm được TLS tới proxy module Go: xem `OFFLINE_MODULES` trong
+   `deploy/compose/README.md` của repo core (`Dockerfile` ở đây có tầng `gomod` tuỳ chọn cho việc đó). Bộ chạy thử
+   của repo core, `make compose-smoke`, chạy đúng luồng này với connector mẫu và đối tác giả `cmd/fakepartner`
+   (chỉ cho phát triển; không có trong image connector của bạn).
 
 ## Giao thức của "acme" (đối tác giả)
 
