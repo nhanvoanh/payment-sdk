@@ -3,7 +3,8 @@
 # APP_ENV=development, CONNECTOR_INSECURE=true (gRPC không mã hoá), mật khẩu cố định. Không dùng cho production.
 #
 # Bắt buộc đặt (không có mặc định, thiếu thì compose từ chối chạy):
-#   PAYMENT_CORE_IMAGE  image của core do đội nền tảng cấp (tên đầy đủ kèm tag)
+#   PAYMENT_CORE_IMAGE  image của core do đội nền tảng cấp (tên đầy đủ kèm tag); phải là image bạn đã tự dựng hoặc kéo
+#                       về máy (đừng đặt tên cục bộ mà bạn chưa có: compose sẽ thử kéo tên đó từ registry công khai)
 #   CONNECTOR_NAME      tên connector của bạn, khớp acme.Name đã đổi (^[a-z][a-z0-9_]{0,31}$)
 #   JWT_KEYS            khoá ký token của core: JWT_KEYS="k1:$(openssl rand -base64 32)"
 # Tuỳ chọn: CONNECTOR_METHOD (phương thức connector khai, mặc định wallet: để `method` trong request tự chọn connector
@@ -14,6 +15,9 @@
 #   docker compose run --rm migrate && docker compose up -d serve
 #   docker compose run --rm -T serve client create --code dev --name Dev --scopes payment:create,payment:read
 #   # rồi POST http://127.0.0.1:8080/v1/oauth/token và /v1/payments (README của core, mục API)
+#
+# Gỡ: compose nội suy cả file kể cả khi down nên `down` cũng cần đủ ba biến bắt buộc (giá trị tuỳ ý cho JWT_KEYS):
+#   PAYMENT_CORE_IMAGE=x CONNECTOR_NAME=x JWT_KEYS=x docker compose down -v
 #
 # Không có Kafka, worker, Redis: serve chạy được không cần chúng. Idempotency dùng bản trong bộ nhớ (một tiến trình) vì
 # không đặt REDIS_ADDR; outbox vẫn ghi vào MariaDB nhưng không ai gửi lên Kafka, bộ quét/đối soát không chạy. Muốn thử

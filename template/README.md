@@ -53,6 +53,9 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
    docker compose run --rm -T serve client create --code dev --name Dev --scopes payment:create,payment:read
    ```
 
+   Gỡ: `PAYMENT_CORE_IMAGE=x CONNECTOR_NAME=x JWT_KEYS=x docker compose down -v` (compose nội suy cả file nên `down` cũng cần
+   ba biến bắt buộc; giá trị tuỳ ý). `PAYMENT_CORE_IMAGE` phải là image bạn đã dựng hoặc kéo về.
+
    rồi lấy token (`POST /v1/oauth/token`) và tạo thanh toán (`POST /v1/payments`, header `Idempotency-Key`,
    `method` là phương thức connector của bạn khai; đổi `CONNECTOR_METHOD` nếu không phải `wallet`) ở
    `127.0.0.1:8080` (đổi bằng `PAYMENT_HTTP_PORT`). Chỉ cho máy phát triển (`CONNECTOR_INSECURE=true`). Không có Kafka,
