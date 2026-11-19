@@ -781,21 +781,44 @@ func TestCheck_Catches_QueryRefundNotFoundWithoutProviderRef(t *testing.T) {
 	expectBoth(t, r, "RFD-4")
 }
 
-// Không truy vấn được khi thiếu ProviderRef mà trả ErrUnknownOutcome là hợp lệ với RFD-4 (core không chốt gì).
-func TestCheck_QueryRefundUnknownWithoutProviderRef_Passes(t *testing.T) {
+// Connector không truy vấn được khi thiếu ProviderRef mà trả ErrUnknownOutcome cho MỌI truy vấn hoàn ProviderRef rỗng
+// (không nhìn trạng thái đối tác, như connector thật) KHÔNG đạt: RFD-2 (lệnh hoàn đối tác không biết phải là
+// Found=false, không lỗi) bắt, cả qua gRPC; RFD-3/RFD-4 không bắn (lỗi ở đó là "chưa rõ" hợp lệ). Hai lựa chọn đạt
+// là truy vấn theo mã dựng từ RefundCode + CreatedAt, hoặc không khai OpQueryRefund (ca dưới).
+func TestCheck_Catches_QueryRefundUnknownWithoutProviderRef(t *testing.T) {
 	t.Parallel()
-	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
 		good := f.OnQueryRefund
 		f.OnQueryRefund = func(ctx context.Context, req connector.QueryRefundRequest) (connector.RefundStatus, error) {
-			if req.ProviderRef == "" && p.hasRefund(req.RefundCode) {
+			if req.ProviderRef == "" {
 				return connector.RefundStatus{}, connector.ErrUnknownOutcome
 			}
 			return good(ctx, req)
 		}
 		return f
 	}))
-	if slices.ContainsFunc(r.Findings, func(f conformance.Finding) bool { return strings.HasPrefix(f.Rule, "RFD-4") }) {
-		t.Fatalf("ErrUnknownOutcome không được là vi phạm RFD-4:%s", dump(r))
+	expectBoth(t, r, "RFD-2")
+}
+
+// Không khai OpQueryRefund (vẫn khai refund): RFD-2/3/4 vào Skipped kèm lý do, cả bản /grpc, và connector đạt.
+func TestCheck_RefundQueryUndeclared_SkipsAndPasses(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		f.Capabilities[connector.OpQueryRefund] = false
+		return f
+	}))
+	if len(r.Findings) != 0 {
+		t.Fatalf("không khai truy vấn hoàn thì phải đạt:%s", dump(r))
+	}
+	for _, code := range []string{"RFD-2", "RFD-3", "RFD-4"} {
+		for _, c := range []string{code, code + "/grpc"} {
+			if !slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, c+": ") && len(s) > len(c)+2 }) {
+				t.Errorf("thiếu %q trong Skipped (kèm lý do): %v", c, r.Skipped)
+			}
+		}
+	}
+	if slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, "RFD-1: ") }) {
+		t.Errorf("RFD-1 vẫn áp dụng khi khai refund: %v", r.Skipped)
 	}
 }
 

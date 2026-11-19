@@ -76,7 +76,9 @@ func checkRFD3(e *env) {
 // checkRFD4: lệnh hoàn đối tác ĐÃ nhận phải tìm được bằng RefundCode + CreatedAt khi core chưa có ProviderRef (core
 // mất kết quả tạo: tiến trình chết sau lời gọi, lần ghi kết quả hỏng). Core chốt failed/not_sent và nhả số tiền
 // đang giữ cho refund còn `new` mà truy vấn trả Found=false, nên "không thấy" chỉ hợp lệ khi đối tác chắc chắn
-// không có lệnh hoàn đó. Không truy vấn được khi thiếu ProviderRef thì trả ErrUnknownOutcome.
+// không có lệnh hoàn đó. Connector không truy vấn được theo mã đó thì không được khai OpQueryRefund (RFD-2 bắt
+// connector trả lỗi cho mọi truy vấn thiếu ProviderRef). ErrUnknownOutcome ở đây không là vi phạm vì đó là cách báo
+// lỗi đối tác tạm thời, không phải một cách thiết kế connector.
 func checkRFD4(e *env) {
 	tx := e.tx()
 	ref, ok := e.createNormal(tx)
@@ -109,8 +111,8 @@ func checkRFD4(e *env) {
 	case err == nil && st.Found, isUnknownForCore(err):
 		return
 	case err == nil:
-		e.fail("QueryRefund (ProviderRef rỗng) cho lệnh hoàn đối tác vừa nhận trả Found false; cần Found true (truy vấn theo mã dựng từ RefundCode + CreatedAt) hoặc ErrUnknownOutcome; core chốt refund failed/not_sent và nhả số tiền trong khi đối tác có thể đã hoàn, khách có thể được hoàn hai lần")
+		e.fail("QueryRefund (ProviderRef rỗng) cho lệnh hoàn đối tác vừa nhận trả Found false; cần Found true (truy vấn theo mã dựng từ RefundCode + CreatedAt; không làm được thì đừng khai OpQueryRefund); core chốt refund failed/not_sent và nhả số tiền trong khi đối tác có thể đã hoàn, khách có thể được hoàn hai lần")
 	default:
-		e.fail("QueryRefund (ProviderRef rỗng) cho lệnh hoàn đối tác vừa nhận trả %v (core hiểu là %s); cần Found true hoặc ErrUnknownOutcome; core không biết đối tác có giữ lệnh hoàn hay không", err, outcomeText(err))
+		e.fail("QueryRefund (ProviderRef rỗng) cho lệnh hoàn đối tác vừa nhận trả %v (core hiểu là %s); cần Found true (truy vấn theo mã dựng từ RefundCode + CreatedAt; không làm được thì đừng khai OpQueryRefund); core không biết đối tác có giữ lệnh hoàn hay không", err, outcomeText(err))
 	}
 }
