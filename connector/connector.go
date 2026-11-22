@@ -244,7 +244,7 @@ type RefundResult struct {
 }
 
 // QueryRefundRequest: ProviderRef có thể RỖNG — core truy vấn cả lệnh hoàn mà nó chưa nghe được kết quả tạo
-// (tiến trình chết sau lời gọi, lần ghi kết quả hỏng). Connector khai OpQueryRefund chỉ có hai cách đạt:
+// (tiến trình chết sau lời gọi, lần ghi kết quả hỏng). Connector chỉ có hai cách đạt:
 //   - (a) truy vấn theo mã dựng tất định từ RefundCode + CreatedAt (+ TransactionCreatedAt), đúng mã đã gửi ở
 //     CreateRefund (luật ID-4), nên truy vấn được cả khi ProviderRef rỗng (luật RFD-2, RFD-4);
 //   - (b) không khai OpQueryRefund: core không truy vấn lệnh hoàn, refund kẹt `new` không bao giờ được tự chốt mà
