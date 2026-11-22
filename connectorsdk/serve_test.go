@@ -400,12 +400,13 @@ func TestServe_RejectsWrongConnectorNameBeforeHandler(t *testing.T) {
 	require.Equal(t, 2, f.Calls("create"))
 }
 
-func TestServe_RejectsMaxConcurrentStreamsOutOfRange(t *testing.T) {
+// Khoảng [100, 100000] chỉ áp cho biến môi trường: giá trị đặt bằng code được nhận như trước khi có biến đó.
+func TestServe_AcceptsAnyProgrammaticMaxConcurrentStreams(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cấu hình hợp lệ thì Serve trả về ngay thay vì chạy mãi
 	for _, n := range []uint32{1, 99, 100001} {
 		err := Serve(ctx, newFake(), Options{ListenAddr: "127.0.0.1:0", Insecure: true, MaxConcurrentStreams: n})
-		require.ErrorContains(t, err, "MaxConcurrentStreams", n)
+		require.NoError(t, err, n)
 	}
 }
 
