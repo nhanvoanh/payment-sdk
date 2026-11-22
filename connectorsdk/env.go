@@ -3,9 +3,11 @@ package connectorsdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,11 +17,20 @@ import (
 
 // OptionsFromEnv đọc cấu hình từ biến môi trường:
 // CONNECTOR_LISTEN_ADDR (mặc định :9090), CONNECTOR_TLS_CERT/KEY/CA, CONNECTOR_ALLOWED_CLIENTS (phẩy),
-// CONNECTOR_INSECURE (chỉ đúng chuỗi "true" mới bật). Thiếu chứng chỉ mà không bật Insecure là lỗi.
+// CONNECTOR_INSECURE (chỉ đúng chuỗi "true" mới bật), CONNECTOR_MAX_CONCURRENT_STREAMS (số lời gọi đồng thời tối đa
+// trên một kết nối gRPC, mặc định 1000, cho phép 100–100000). Thiếu chứng chỉ mà không bật Insecure là lỗi.
 func OptionsFromEnv(getenv func(string) string) (Options, error) {
-	o := Options{ListenAddr: getenv("CONNECTOR_LISTEN_ADDR")}
+	o := Options{ListenAddr: getenv("CONNECTOR_LISTEN_ADDR"), MaxConcurrentStreams: defaultMaxStreams}
 	if o.ListenAddr == "" {
 		o.ListenAddr = defaultListenAddr
+	}
+	if v := getenv("CONNECTOR_MAX_CONCURRENT_STREAMS"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil || !validStreams(uint32(n)) {
+			return Options{}, fmt.Errorf("connectorsdk: CONNECTOR_MAX_CONCURRENT_STREAMS=%q phải là số nguyên trong [%d, %d]",
+				v, minMaxStreams, maxMaxStreams)
+		}
+		o.MaxConcurrentStreams = uint32(n)
 	}
 	for _, n := range strings.Split(getenv("CONNECTOR_ALLOWED_CLIENTS"), ",") {
 		if n = strings.TrimSpace(n); n != "" {

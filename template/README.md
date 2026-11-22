@@ -41,6 +41,8 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 
    Chỉ khi phát triển cục bộ mới đặt `CONNECTOR_INSECURE=true` (thay cho ba biến TLS); mặc định là TLS 1.3 và
    bắt buộc chứng chỉ client. `TestAcme_OverMTLS` là ví dụ chạy được của đúng đường này.
+   `CONNECTOR_MAX_CONCURRENT_STREAMS` (mặc định 1000, cho phép 100–100000) là số lời gọi đồng thời tối đa trên một
+   kết nối gRPC; core giữ một kết nối tới mỗi địa chỉ connector, nên lời gọi vượt số này chờ ở phía core.
 6. **Chạy trọn luồng với image của core.** `docker-compose.yml` ở thư mục này dựng MariaDB, `migrate`, `serve`
    (từ image core do đội nền tảng cấp) và connector của bạn (`build: .`), để một request HTTP đi hết đường
    core → gRPC → connector → đối tác. Đặt ba biến bắt buộc rồi chạy:

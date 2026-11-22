@@ -35,6 +35,8 @@ const (
 	healthPrefix         = "/grpc.health.v1.Health/"
 	defaultListenAddr    = ":9090"
 	defaultMaxStreams    = 1000
+	minMaxStreams        = 100
+	maxMaxStreams        = 100000
 	defaultShutdownGrace = 20 * time.Second
 )
 
@@ -44,7 +46,7 @@ type Options struct {
 	TLS                  *tls.Config   // từ connectorrpc.ServerTLS; bắt buộc trừ khi Insecure
 	Insecure             bool          // chỉ cho phát triển cục bộ: không mã hoá, không xác thực client
 	AllowedClients       []string      // tên DNS SAN của chứng chỉ client được phép; bắt buộc khi có TLS
-	MaxConcurrentStreams uint32        // mặc định 1000
+	MaxConcurrentStreams uint32        // 0 là mặc định 1000; khác 0 thì phải trong [100, 100000]
 	ShutdownGrace        time.Duration // thời gian chờ lời gọi đang chạy khi tắt; mặc định 20s
 	Logger               *slog.Logger  // mặc định slog.Default()
 
@@ -100,9 +102,13 @@ func (o Options) validate() error {
 		return errors.New("connectorsdk: TLS có GetConfigForClient có thể đè cấu hình kiểm client; không được dùng")
 	case o.TLS != nil && len(o.AllowedClients) == 0:
 		return errors.New("connectorsdk: AllowedClients rỗng; liệt kê tên DNS của client được phép")
+	case o.MaxConcurrentStreams != 0 && !validStreams(o.MaxConcurrentStreams):
+		return fmt.Errorf("connectorsdk: MaxConcurrentStreams=%d ngoài khoảng [%d, %d]", o.MaxConcurrentStreams, minMaxStreams, maxMaxStreams)
 	}
 	return nil
 }
+
+func validStreams(n uint32) bool { return n >= minMaxStreams && n <= maxMaxStreams }
 
 // ServeListener là Serve trên một listener có sẵn (ListenAddr bị bỏ qua), để test dùng cổng :0.
 // Listener được đóng khi hàm trả về.

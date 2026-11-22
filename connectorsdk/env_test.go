@@ -69,3 +69,26 @@ func TestOptionsFromEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestOptionsFromEnv_MaxConcurrentStreams(t *testing.T) {
+	base := map[string]string{"CONNECTOR_INSECURE": "true"}
+	with := func(v string) func(string) string {
+		m := map[string]string{"CONNECTOR_MAX_CONCURRENT_STREAMS": v}
+		for k, x := range base {
+			m[k] = x
+		}
+		return env(m)
+	}
+	o, err := OptionsFromEnv(env(base))
+	require.NoError(t, err)
+	require.Equal(t, uint32(1000), o.MaxConcurrentStreams, "mặc định 1000")
+	for v, want := range map[string]uint32{"100": 100, "5000": 5000, "100000": 100000} {
+		o, err := OptionsFromEnv(with(v))
+		require.NoError(t, err, v)
+		require.Equal(t, want, o.MaxConcurrentStreams, v)
+	}
+	for _, v := range []string{"99", "100001", "0", "-1", "abc", "1e3", " 200"} {
+		_, err := OptionsFromEnv(with(v))
+		require.ErrorContains(t, err, "CONNECTOR_MAX_CONCURRENT_STREAMS", v)
+	}
+}

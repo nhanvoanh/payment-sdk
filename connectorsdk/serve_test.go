@@ -399,3 +399,45 @@ func TestServe_RejectsWrongConnectorNameBeforeHandler(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, f.Calls("create"))
 }
+
+func TestServe_RejectsMaxConcurrentStreamsOutOfRange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cấu hình hợp lệ thì Serve trả về ngay thay vì chạy mãi
+	for _, n := range []uint32{1, 99, 100001} {
+		err := Serve(ctx, newFake(), Options{ListenAddr: "127.0.0.1:0", Insecure: true, MaxConcurrentStreams: n})
+		require.ErrorContains(t, err, "MaxConcurrentStreams", n)
+	}
+}
+
+// Quá MaxConcurrentStreams lời gọi đồng thời trên một kết nối thì lời gọi dư chờ ở client, không chạm handler.
+func TestServe_MaxConcurrentStreamsLimitsInFlightCalls(t *testing.T) {
+	const limit = 100
+	f := newFake()
+	var mu sync.Mutex
+	inFlight := 0
+	release := make(chan struct{})
+	f.OnCreate = func(context.Context, connector.CreatePaymentRequest) (connector.CreatePaymentResult, error) {
+		mu.Lock()
+		inFlight++
+		mu.Unlock()
+		<-release
+		return connector.CreatePaymentResult{Status: connector.StatusPending}, nil
+	}
+	count := func() int { mu.Lock(); defer mu.Unlock(); return inFlight }
+	r := start(t, f, Options{Insecure: true, MaxConcurrentStreams: limit, ShutdownGrace: time.Second})
+	cl := connectorpb.NewConnectorServiceClient(plainClient(t, r.addr))
+	var wg sync.WaitGroup
+	for range limit + 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = cl.CreatePayment(ctx5(t), createReq(), grpc.WaitForReady(true))
+		}()
+	}
+	require.Eventually(t, func() bool { return count() == limit }, 5*time.Second, 5*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, limit, count(), "lời gọi vượt giới hạn không được tới handler")
+	close(release)
+	wg.Wait()
+	require.Equal(t, limit+5, count())
+}
