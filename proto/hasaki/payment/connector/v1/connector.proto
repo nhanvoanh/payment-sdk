@@ -8,7 +8,7 @@ package hasaki.payment.connector.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb";
+option go_package = "github.com/nhanvoanh/payment-sdk/connectorpb";
 
 service ConnectorService {
   rpc Describe(DescribeRequest) returns (DescribeResponse);

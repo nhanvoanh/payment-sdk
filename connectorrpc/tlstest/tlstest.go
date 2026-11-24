@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
 )
 
 // Bundle là một CA cùng thư mục tạm chứa các chứng chỉ nó đã cấp.

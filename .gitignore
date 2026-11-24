@@ -1,0 +1,6 @@
+# Plugin protoc build từ tools/ (make proto); không đưa binary vào git.
+bin/
+.env
+*.local.env
+coverage.out
+.DS_Store

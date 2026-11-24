@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 // designKind: loại mà theo thiết kế KHÔNG được che (chữ yếu của tên đứng riêng; thành phần địa chỉ ngắn đứng riêng

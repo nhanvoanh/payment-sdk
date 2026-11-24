@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestForbiddenNames quét mọi file văn bản dưới sdk/ tìm các từ khoá trong SDK_FORBIDDEN_NAMES (phẩy,
+// TestForbiddenNames quét mọi file văn bản của repo SDK tìm các từ khoá trong SDK_FORBIDDEN_NAMES (phẩy,
 // không phân biệt hoa thường). Danh sách do CI của repo sở hữu đặt vào, không nằm trong mã nguồn.
 // Thấy thì chỉ in ĐƯỜNG DẪN, không in từ khoá: log CI không được làm lộ danh sách.
 func TestForbiddenNames(t *testing.T) {
@@ -61,6 +61,6 @@ func TestForbiddenNames(t *testing.T) {
 	})
 	if err != nil {
 		// Lỗi duyệt thường mang đường dẫn: không in, vì đường dẫn có thể chứa từ khoá.
-		t.Fatal("không duyệt được cây thư mục sdk/")
+		t.Fatal("không duyệt được cây thư mục của repo SDK")
 	}
 }

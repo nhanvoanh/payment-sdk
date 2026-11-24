@@ -146,11 +146,11 @@ package acme_test
 import (
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/conformance"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme/acmetest"
+	"github.com/nhanvoanh/payment-sdk/conformance"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/template/acme"
+	"github.com/nhanvoanh/payment-sdk/template/acme/acmetest"
 )
 
 func TestConformance(t *testing.T) {

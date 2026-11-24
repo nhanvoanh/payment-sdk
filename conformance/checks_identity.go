@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 // Thời điểm tạo mà mọi request của bộ luật mang (như core gửi: UTC, micro giây). Cố ý ở quá khứ, sát nửa đêm

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"syscall"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
 )
 
 // OptionsFromEnv đọc cấu hình từ biến môi trường:

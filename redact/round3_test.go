@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 const shortAddr = "12 Lê Lợi\nThôn Đông, Xã Tân Phú\nHuyện Củ Chi"

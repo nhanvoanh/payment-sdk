@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/providerhttp"
 )
 
 // Fake cài Connector và mọi interface tuỳ chọn; năng lực bật/tắt bằng Capabilities. An toàn khi gọi đồng thời.

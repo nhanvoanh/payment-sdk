@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 // Tên/địa chỉ bỏ dấu (tên chủ thẻ ASCII hoa ở cổng thanh toán Việt Nam) vẫn bị che như giá trị trọn.

@@ -18,8 +18,10 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 ## Các bước làm connector của bạn
 
 1. **Tạo repo từ mẫu.** Sao chép thư mục này thành gốc repo mới. Tạo `go.mod` riêng, `require` module
-   SDK, và đổi đường dẫn import `bitbucket.org/hasaki-tech/payment-connector-sdk/template/...` thành
-   đường dẫn module của bạn (`Dockerfile` giả định `go.mod` nằm ở gốc repo).
+   SDK, và đổi đường dẫn import `github.com/nhanvoanh/payment-sdk/template/...` thành
+   đường dẫn module của bạn (`Dockerfile` giả định `go.mod` nằm ở gốc repo). Module SDK riêng tư: tải bằng
+   `GOPRIVATE` và biến môi trường git như mục "Tải module riêng tư" trong `README.md` ở gốc repo SDK; bước dựng
+   image không tự tải được nó, nên dựng từ cache module của máy chủ (`GOPROXY=file:///gomod`, bước 6).
 2. **Đổi tên `acme`.** Đổi thư mục `acme`, `acme.Name` (tên connector: khớp `^[a-z][a-z0-9_]{0,31}$`, KHÔNG
    bao giờ đổi sau khi chạy thật vì core khử trùng webhook theo tên), tiền tố biến môi trường `ACME_`, và
    `acmetest`.

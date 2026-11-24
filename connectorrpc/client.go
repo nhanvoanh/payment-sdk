@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorpb"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 const (

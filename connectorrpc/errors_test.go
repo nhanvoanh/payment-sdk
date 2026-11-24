@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorpb"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
 )
 
 func TestErrorRoundTrip(t *testing.T) {

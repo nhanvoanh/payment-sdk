@@ -9,7 +9,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
+	"github.com/nhanvoanh/payment-sdk/connectorpb"
 )
 
 var connectorServicePrefix = "/" + connectorpb.ConnectorService_ServiceDesc.ServiceName + "/"

@@ -12,9 +12,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorpb"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
 )
 
 // Harness là một server gRPC đang chạy trên bufconn cùng một kết nối tới nó. Test có thể Stop server

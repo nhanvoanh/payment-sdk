@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connector"
 )
 
 // rule là một luật; op (và alsoOp) khác rỗng nghĩa là chỉ áp khi connector khai thao tác đó.

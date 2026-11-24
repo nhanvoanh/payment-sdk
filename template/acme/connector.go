@@ -18,11 +18,11 @@ import (
 	"strings"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/signing"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/tokencache"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/providerhttp"
+	"github.com/nhanvoanh/payment-sdk/signing"
+	"github.com/nhanvoanh/payment-sdk/tokencache"
 )
 
 // Name là khoá cấu hình của core và là một phần khoá khử trùng webhook: không bao giờ đổi.

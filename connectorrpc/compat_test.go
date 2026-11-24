@@ -11,10 +11,10 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorpb"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 // addedFields là các trường thêm sau bản đầu của contract: số trường là hợp đồng trên dây, không bao giờ đổi

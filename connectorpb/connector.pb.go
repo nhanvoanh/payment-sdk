@@ -2479,7 +2479,7 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\fCreateRefund\x120.hasaki.payment.connector.v1.CreateRefundRequest\x1a1.hasaki.payment.connector.v1.CreateRefundResponse\x12p\n" +
 	"\vQueryRefund\x12/.hasaki.payment.connector.v1.QueryRefundRequest\x1a0.hasaki.payment.connector.v1.QueryRefundResponse\x12s\n" +
 	"\fParseWebhook\x120.hasaki.payment.connector.v1.ParseWebhookRequest\x1a1.hasaki.payment.connector.v1.ParseWebhookResponse\x12v\n" +
-	"\rParseRedirect\x121.hasaki.payment.connector.v1.ParseRedirectRequest\x1a2.hasaki.payment.connector.v1.ParseRedirectResponseB=Z;bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpbb\x06proto3"
+	"\rParseRedirect\x121.hasaki.payment.connector.v1.ParseRedirectRequest\x1a2.hasaki.payment.connector.v1.ParseRedirectResponseB.Z,github.com/nhanvoanh/payment-sdk/connectorpbb\x06proto3"
 
 var (
 	file_hasaki_payment_connector_v1_connector_proto_rawDescOnce sync.Once

@@ -6,7 +6,7 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connector"
 )
 
 func (e *env) receiver() connector.WebhookReceiver { w, _ := e.c.(connector.WebhookReceiver); return w }

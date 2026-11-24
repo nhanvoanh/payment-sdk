@@ -6,7 +6,7 @@ import (
 	"sort"
 	"sync"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 // Registry giữ các connector theo tên; an toàn cho đọc đồng thời sau khi đăng ký.

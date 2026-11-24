@@ -1,7 +1,7 @@
-# Sinh code gRPC bằng plugin build từ sdk/tools (phiên bản ghim), không dùng plugin cài sẵn trên máy.
+# Sinh code gRPC bằng plugin build từ tools/ (phiên bản ghim), không dùng plugin cài sẵn trên máy.
 PROTO_BIN := $(CURDIR)/tools/bin
 PROTO_SRC := proto/hasaki/payment/connector/v1/connector.proto
-MODULE := bitbucket.org/hasaki-tech/payment-connector-sdk
+MODULE := github.com/nhanvoanh/payment-sdk
 
 .PHONY: proto proto-check
 
@@ -17,4 +17,4 @@ proto:
 
 # Sinh lại rồi đòi code đã commit trùng khớp (kể cả file mới chưa theo dõi).
 proto-check: proto
-	@test -z "$$(git status --porcelain -- connectorpb)" || { git status --short -- connectorpb; echo "connectorpb lệch so với .proto: chạy make -C sdk proto rồi commit"; exit 1; }
+	@test -z "$$(git status --porcelain -- connectorpb)" || { git status --short -- connectorpb; echo "connectorpb lệch so với .proto: chạy make proto rồi commit"; exit 1; }

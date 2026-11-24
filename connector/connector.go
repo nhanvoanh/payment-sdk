@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 // Connector là phần bắt buộc; mọi năng lực khác là interface tuỳ chọn bên dưới.

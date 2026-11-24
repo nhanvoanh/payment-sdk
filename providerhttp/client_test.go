@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/providerhttp"
 )
 
 func newClient(t *testing.T, cfg providerhttp.Config) *providerhttp.Client {

@@ -3,8 +3,8 @@
 // công khai trong acmetest (merchant M-TEST, secret acme-test-secret), không có TLS.
 //
 // Đây là chỗ DUY NHẤT ngoài file _test.go và ngoài bộ-test được import acmetest, và chỉ acmetest: bộ-test khác
-// vẫn bị cấm ở đây (archtest testKitUsers, depguard "fakepartner-kits"). Image của nó dựng bằng
-// deploy/compose/Dockerfile.template; image connector của người dùng mẫu (sdk/template/Dockerfile) không chứa nó.
+// vẫn bị cấm ở đây (testKitUsers trong arch_test.go ở gốc repo, depguard "fakepartner-kits"). Image của nó dựng bằng
+// deploy/compose/Dockerfile.template của repo core; image connector của người dùng mẫu (template/Dockerfile) không chứa nó.
 package main
 
 import (
@@ -14,7 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme/acmetest"
+	"github.com/nhanvoanh/payment-sdk/template/acme/acmetest"
 )
 
 func main() {

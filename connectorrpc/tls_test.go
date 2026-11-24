@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc/tlstest"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc/tlstest"
 )
 
 type clock struct{ t time.Time }

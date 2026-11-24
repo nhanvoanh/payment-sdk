@@ -1,4 +1,4 @@
-module bitbucket.org/hasaki-tech/payment-connector-sdk/tools
+module github.com/nhanvoanh/payment-sdk/tools
 
 go 1.24.0
 

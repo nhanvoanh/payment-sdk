@@ -14,10 +14,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc/grpctest"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc/grpctest"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 // Mode là cách đối tác giả cư xử ở lần gọi kế tiếp.

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorpb"
 )
 
 // ErrorToProto xếp lỗi của connector vào ConnectorError. Thứ tự xét giống connector.Classify:

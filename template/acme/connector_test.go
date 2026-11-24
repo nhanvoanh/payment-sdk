@@ -18,14 +18,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/conformance"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc/tlstest"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorsdk"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme/acmetest"
+	"github.com/nhanvoanh/payment-sdk/conformance"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc/tlstest"
+	"github.com/nhanvoanh/payment-sdk/connectorsdk"
+	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/template/acme"
+	"github.com/nhanvoanh/payment-sdk/template/acme/acmetest"
 )
 
 var amount = paykit.Money{Amount: 150000, Currency: "VND"}

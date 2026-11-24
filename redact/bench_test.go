@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 var benchPII = redact.Customer("Nguyễn Thị Minh Khai", "nguyen.khai+shop@example.com", "0987654321",

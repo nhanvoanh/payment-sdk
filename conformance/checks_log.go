@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 // logCanary là khách mang chuỗi canh của LOG-1: tên có dấu (để thử \uXXXX và dạng bỏ dấu "HUYNH DOAN CANARYNAME" của

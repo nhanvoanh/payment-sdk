@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"os"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorsdk"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/template/acme"
+	"github.com/nhanvoanh/payment-sdk/connectorsdk"
+	"github.com/nhanvoanh/payment-sdk/template/acme"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 // Bảng hai chiều của luật chữ mạnh/yếu (review vòng 2): đầu vào → đầu ra chính xác.

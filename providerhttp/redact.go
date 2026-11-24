@@ -1,8 +1,8 @@
 package providerhttp
 
 import (
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 // Hai lớp che, theo thứ tự áp dụng:

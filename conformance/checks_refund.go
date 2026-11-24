@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connector"
 )
 
 func (e *env) refundReq(tx, ref, refundCode string) connector.RefundRequest {

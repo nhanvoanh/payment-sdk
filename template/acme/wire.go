@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 // File này chỉ có hình dạng dữ liệu trên đường dây của acme và việc đổi qua lại với kiểu của SDK.

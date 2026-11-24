@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc/tlstest"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc/tlstest"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }

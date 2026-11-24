@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorrpc/grpctest"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectortest"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/connectorrpc/grpctest"
+	"github.com/nhanvoanh/payment-sdk/connectortest"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 func newFake() *connectortest.Fake {

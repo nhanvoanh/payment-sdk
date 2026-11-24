@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/providerhttp"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/redact"
+	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/providerhttp"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 func TestRedact_SameAlgorithmAsRedactPackage(t *testing.T) {

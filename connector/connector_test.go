@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

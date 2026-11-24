@@ -1,0 +1,59 @@
+run:
+  timeout: 5m
+
+# Code sinh từ .proto (connectorpb), không lint.
+issues:
+  exclude-dirs:
+    - connectorpb
+
+linters:
+  disable-all: true
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - depguard
+    - revive
+
+linters-settings:
+  depguard:
+    rules:
+      # Gói bộ-test (kênh không mã hoá, CA tạm, đối tác giả, bộ conformance) không được vào mã chạy thật, kể cả qua
+      # một bước nhảy. Chỉ file _test.go và chính các gói đó được import; giữ khớp testKits của arch_test.go.
+      test-kits:
+        files:
+          - "$all"
+          - "!$test"
+          - "!**/conformance/*.go"
+          - "!**/connectorrpc/grpctest/*.go"
+          - "!**/connectorrpc/tlstest/*.go"
+          - "!**/connectortest/*.go"
+          - "!**/template/acme/acmetest/*.go"
+          - "!**/template/cmd/fakepartner/*.go"
+        deny:
+          - pkg: github.com/nhanvoanh/payment-sdk/conformance
+            desc: conformance chỉ dùng trong file _test.go hoặc bộ-test
+          - pkg: github.com/nhanvoanh/payment-sdk/connectorrpc/grpctest
+            desc: grpctest chỉ dùng trong file _test.go hoặc bộ-test
+          - pkg: github.com/nhanvoanh/payment-sdk/connectorrpc/tlstest
+            desc: tlstest chỉ dùng trong file _test.go hoặc bộ-test
+          - pkg: github.com/nhanvoanh/payment-sdk/connectortest
+            desc: connectortest chỉ dùng trong file _test.go hoặc bộ-test
+          - pkg: github.com/nhanvoanh/payment-sdk/template/acme/acmetest
+            desc: acmetest chỉ dùng trong file _test.go hoặc bộ-test
+      # Ngoại lệ hẹp của "test-kits": template/cmd/fakepartner chạy đối tác giả của mẫu thành tiến trình nên được
+      # import ĐÚNG acmetest; mọi bộ-test khác vẫn bị cấm ở đó. Giữ khớp testKitUsers của arch_test.go.
+      fakepartner-kits:
+        files:
+          - "**/template/cmd/fakepartner/*.go"
+          - "!$test"
+        deny:
+          - pkg: github.com/nhanvoanh/payment-sdk/conformance
+            desc: fakepartner chỉ được dùng bộ-test acmetest
+          - pkg: github.com/nhanvoanh/payment-sdk/connectorrpc/grpctest
+            desc: fakepartner chỉ được dùng bộ-test acmetest
+          - pkg: github.com/nhanvoanh/payment-sdk/connectorrpc/tlstest
+            desc: fakepartner chỉ được dùng bộ-test acmetest
+          - pkg: github.com/nhanvoanh/payment-sdk/connectortest
+            desc: fakepartner chỉ được dùng bộ-test acmetest

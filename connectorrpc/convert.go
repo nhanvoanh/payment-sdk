@@ -17,9 +17,9 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connectorpb"
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connectorpb"
+	"github.com/nhanvoanh/payment-sdk/paykit"
 )
 
 // ProtocolVersion là phiên bản contract gRPC; connector báo ở Describe, core từ chối phiên bản khác.

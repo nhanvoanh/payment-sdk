@@ -37,7 +37,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"bitbucket.org/hasaki-tech/payment-connector-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/connector"
 )
 
 const (
