@@ -34,6 +34,21 @@ type fakePartner struct {
 	pays    map[string]paid
 	expiry  map[string]time.Time // hạn phiên đối tác đặt cho mỗi giao dịch (conformance.ExpiryReporter)
 	release chan struct{}        // đóng khi test xong, để goroutine của connector treo được giải phóng
+	logs    strings.Builder      // log connector ghi qua logf (conformance.LogReporter)
+}
+
+// ConnectorLogs cài conformance.LogReporter.
+func (p *fakePartner) ConnectorLogs() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.logs.String()
+}
+
+// logf là logger mà connector giả ghi vào (như developer nối logger của connector vào một bộ đệm).
+func (p *fakePartner) logf(format string, args ...any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	fmt.Fprintf(&p.logs, format+"\n", args...)
 }
 
 // PaymentExpiry cài conformance.ExpiryReporter.
@@ -660,7 +675,7 @@ func TestCheck_SkipsUndeclaredOperations(t *testing.T) {
 	if len(r.Findings) != 0 {
 		t.Fatalf("thao tác không khai không được sinh finding:%s", dump(r))
 	}
-	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "QRY-4", "CHG-1", "CXL-1", "CXL-2", "CXL-3",
+	want := []string{"PAY-3", "PAY-4", "PAY-5", "PAY-6", "QRY-1", "QRY-2", "QRY-3", "QRY-4", "CHG-1", "CHG-2", "CXL-1", "CXL-2", "CXL-3",
 		"CXL-4", "WHK-1", "WHK-2", "WHK-3", "WHK-4", "WHK-5", "WHK-6", "RFD-1", "RFD-2", "RFD-3", "RFD-4"}
 	for _, code := range want {
 		for _, c := range []string{code, code + "/grpc"} {
@@ -1097,14 +1112,15 @@ func TestCheck_CancelWithoutRefOnHang_SkippedWithoutCounter(t *testing.T) {
 		}
 	}
 	others := slices.DeleteFunc(slices.Clone(r.Skipped), func(s string) bool {
-		return strings.HasPrefix(s, "ID-4") || strings.HasPrefix(s, "PAY-8") // thiếu RequestRecorder, ExpiryReporter
+		// thiếu RequestRecorder, ExpiryReporter, LogReporter
+		return strings.HasPrefix(s, "ID-4") || strings.HasPrefix(s, "PAY-8") || strings.HasPrefix(s, "CHG-2")
 	})
 	if len(others) != 2 {
 		t.Errorf("ngoài ID-4 (thiếu RequestRecorder), chỉ lượt thêm của CXL-2 bị bỏ: %v", r.Skipped)
 	}
 }
 
-// plainPartner giấu mọi interface tuỳ chọn của đối tác giả (RequestCounter, RequestRecorder, ExpiryReporter).
+// plainPartner giấu mọi interface tuỳ chọn của đối tác giả (RequestCounter, RequestRecorder, ExpiryReporter, LogReporter).
 type plainPartner struct{ conformance.Partner }
 
 // Các câu trả lời dứt khoát đều qua CXL-3.
@@ -2039,4 +2055,306 @@ func TestCheck_Catches_ZeroCreatedAtDateSuffix(t *testing.T) {
 		return f
 	}))
 	expectBoth(t, r, "ID-5")
+}
+
+// payCode là mã canh của CHG-2 (conformance dùng đúng chuỗi này khi không có Harness.ChargeCode).
+const payCode = "CFPAYCODE7Q4X9K2M8ZT3"
+
+// codeSeq là Harness.ChargeCode trả "PCODE-0001", "PCODE-0002"... mỗi lần gọi một mã mới.
+func codeSeq() func(conformance.Partner) string {
+	var n atomic.Int64
+	return func(conformance.Partner) string { return fmt.Sprintf("PCODE-%04d", n.Add(1)) }
+}
+
+// Có hook thì mọi ChargeRequest bộ luật dựng mang mã của hook, mỗi request một lần gọi (mã dùng một lần).
+func TestCheck_ChargeCodeHookSuppliesEveryCharge(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var got []string
+	h := harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnCharge
+		f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			mu.Lock()
+			got = append(got, req.PaymentCode)
+			mu.Unlock()
+			return good(ctx, req)
+		}
+		return f
+	})
+	h.ChargeCode = codeSeq()
+	r := conformance.Check(t, h)
+	if len(r.Findings) != 0 {
+		t.Fatalf("không được có finding:%s", dump(r))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) == 0 {
+		t.Fatal("không có lời Charge nào")
+	}
+	seen := map[string]bool{}
+	for i, c := range got {
+		if c == "" {
+			t.Errorf("Charge thứ %d không mang mã dù có Harness.ChargeCode", i+1)
+		}
+		if seen[c] {
+			t.Errorf("Charge thứ %d dùng lại mã đã dùng: hook phải được gọi một lần cho mỗi request", i+1)
+		}
+		seen[c] = true
+	}
+}
+
+// codeRequired là connector cần mã: rỗng thì từ chối tại chỗ, không gọi đối tác.
+func codeRequired(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+	good := f.OnCharge
+	f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+		if req.PaymentCode == "" {
+			return connector.ChargeResult{}, &connector.RejectedError{Code: "payment_code_required"}
+		}
+		return good(ctx, req)
+	}
+	return f
+}
+
+// Connector cần mã: không có hook thì CHG-1 hỏng (ModeDown đòi unavailable mà connector từ chối tại chỗ); có hook thì qua.
+func TestCheck_CodeRequiringConnector_NeedsHookForCHG1(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(codeRequired))
+	if !slices.Contains(rules(r), "CHG-1") {
+		t.Errorf("không có hook thì connector cần mã phải hỏng CHG-1; findings:%s", dump(r))
+	}
+	h := harness(codeRequired)
+	h.ChargeCode = codeSeq()
+	r = conformance.Check(t, h)
+	if len(r.Findings) != 0 {
+		t.Errorf("có hook thì connector cần mã phải qua; findings:%s", dump(r))
+	}
+}
+
+// Không có hook: ngoài CHG-2 mọi Charge mang mã rỗng (connector hiện có thấy đúng request như ở v0.1.0); CHG-2 mang mã canh.
+func TestCheck_NoHook_CodeEmptyOutsideCHG2(t *testing.T) {
+	t.Parallel()
+	type seen struct{ tx, code string }
+	var mu sync.Mutex
+	var got []seen
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnCharge
+		f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			mu.Lock()
+			got = append(got, seen{req.TransactionCode, req.PaymentCode})
+			mu.Unlock()
+			return good(ctx, req)
+		}
+		return f
+	}))
+	if len(r.Findings) != 0 {
+		t.Fatalf("không được có finding:%s", dump(r))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var chg2 int
+	for _, s := range got {
+		if strings.HasPrefix(s.tx, "CFCHG2") {
+			chg2++
+			if s.code != payCode {
+				t.Errorf("Charge %s của CHG-2 không mang mã canh", s.tx)
+			}
+		} else if s.code != "" {
+			t.Errorf("Charge %s ngoài CHG-2 mang mã thanh toán khi không có hook", s.tx)
+		}
+	}
+	if chg2 == 0 {
+		t.Error("CHG-2 không gọi Charge")
+	}
+}
+
+// codeLeak là connector tốt nhắc lại mã ở một chỗ.
+type codeLeak func(f *connectortest.Fake, p *fakePartner)
+
+func onCharge(change func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error)) codeLeak {
+	return func(f *connectortest.Fake, p *fakePartner) {
+		good := f.OnCharge
+		f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			res, err := good(ctx, req)
+			if req.PaymentCode == "" {
+				return res, err
+			}
+			return change(p, req, res, err)
+		}
+	}
+}
+
+var codeLeaks = map[string]codeLeak{
+	"Raw.RequestBody": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.Raw.RequestBody = `{"order":"` + req.TransactionCode + `","code":"` + req.PaymentCode + `"}`
+		}
+		return res, err
+	}),
+	"Raw.ResponseBody URL-encode": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.Raw.ResponseBody = "status=00&order=" + req.TransactionCode + "&code=" + url.QueryEscape(strings.ToLower(req.PaymentCode)) + "&x=1"
+		}
+		return res, err
+	}),
+	"Raw kèm lỗi ở ModeReject": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if p.currentMode() == conformance.ModeReject {
+			res.Raw.ResponseBody = `{"error":"R01","code":"` + req.PaymentCode + `"}`
+		}
+		return res, err
+	}),
+	"RejectedError.Message": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if p.currentMode() == conformance.ModeReject {
+			return res, &connector.RejectedError{Code: "R01", Message: "mã " + req.PaymentCode + " không hợp lệ"}
+		}
+		return res, err
+	}),
+	"câu lỗi ModeGarbage": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if p.currentMode() == conformance.ModeGarbage {
+			return res, fmt.Errorf("%w: không đọc được phản hồi cho mã %s", connector.ErrUnknownOutcome, req.PaymentCode)
+		}
+		return res, err
+	}),
+	"ProviderRef": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.ProviderRef = "acme_" + req.PaymentCode
+		}
+		return res, err
+	}),
+	"NextAction.URL": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.NextAction = paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.acme.example/c?code=" + req.PaymentCode}
+		}
+		return res, err
+	}),
+	"NextAction.FormFields": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.NextAction = paykit.NextAction{Kind: paykit.NextActionRedirect, URL: "https://pay.acme.example/c",
+				FormFields: map[string]string{"order": req.TransactionCode, "auth": req.PaymentCode}}
+		}
+		return res, err
+	}),
+	"Raw của QueryPayment sau đó": func(f *connectortest.Fake, _ *fakePartner) {
+		var mu sync.Mutex
+		codes := map[string]string{}
+		goodCharge, goodQuery := f.OnCharge, f.OnQuery
+		f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			mu.Lock()
+			codes[req.TransactionCode] = req.PaymentCode
+			mu.Unlock()
+			return goodCharge(ctx, req)
+		}
+		f.OnQuery = func(ctx context.Context, req connector.QueryPaymentRequest) (connector.PaymentStatus, error) {
+			st, err := goodQuery(ctx, req)
+			mu.Lock()
+			c := codes[req.TransactionCode]
+			mu.Unlock()
+			if err == nil && c != "" {
+				st.Raw.ResponseBody = `{"order":"` + req.TransactionCode + `","paid_with":"` + c + `"}`
+			}
+			return st, err
+		}
+	},
+	"log của connector": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		p.logf("charge %s code=%s", req.TransactionCode, req.PaymentCode)
+		return res, err
+	}),
+}
+
+// Mỗi chỗ connector có thể để lộ mã thanh toán: CHG-2 bắt được, cả thẳng lẫn qua gRPC.
+func TestCheck_Catches_PaymentCodeLeak(t *testing.T) {
+	t.Parallel()
+	for name, leak := range codeLeaks {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+				leak(f, p)
+				return f
+			}))
+			expectBoth(t, r, "CHG-2")
+		})
+	}
+}
+
+// Finding của CHG-2 nêu chỗ lộ, không bao giờ in mã.
+func TestCheck_CHG2_FindingNeverPrintsCode(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		codeLeaks["Raw.RequestBody"](f, p)
+		return f
+	}))
+	var n int
+	for _, f := range r.Findings {
+		if strings.Contains(f.Detail, payCode) {
+			t.Errorf("finding %s in mã thanh toán", f.Rule)
+		}
+		if strings.HasPrefix(f.Rule, "CHG-2") {
+			n++
+			if !strings.Contains(f.Detail, "RawExchange.RequestBody") {
+				t.Errorf("finding %s không nêu chỗ lộ (RawExchange.RequestBody)", f.Rule)
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatalf("CHG-2 không bắn; findings:%s", dump(r))
+	}
+}
+
+// Có hook, connector nhắc lại mã trong một panic hay một lỗi sai loại: finding (của luật bất kỳ) không in mã.
+func TestCheck_HookCodeNeverInAnyFinding(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var used []string
+	h := harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+		f.OnCharge = func(_ context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			mu.Lock()
+			used = append(used, req.PaymentCode)
+			mu.Unlock()
+			if p.currentMode() == conformance.ModeNormal {
+				panic("boom " + req.PaymentCode)
+			}
+			return connector.ChargeResult{}, errors.New("lỗi trơn cho mã " + req.PaymentCode)
+		}
+		return f
+	})
+	h.ChargeCode = codeSeq()
+	r := conformance.Check(t, h)
+	if !slices.Contains(rules(r), "CHG-1") {
+		t.Fatalf("connector hỏng phải có finding CHG-1; findings:%s", dump(r))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, f := range r.Findings {
+		for _, c := range used {
+			if c != "" && strings.Contains(f.Detail, c) {
+				t.Errorf("finding %s in mã thanh toán", f.Rule)
+				break
+			}
+		}
+	}
+}
+
+// noLogReporter giấu LogReporter của đối tác giả.
+type noLogReporter struct{ *fakePartner }
+
+func (noLogReporter) ConnectorLogs() {}
+
+// Đối tác giả không cài LogReporter: phần log của CHG-2 vào Skipped kèm lý do, không phải vi phạm.
+func TestCheck_CHG2_NoLogReporter_Skipped(t *testing.T) {
+	t.Parallel()
+	h := harness(nil)
+	h.New = func(tb testing.TB) (connector.Connector, conformance.Partner) {
+		f, p := newGood(tb)
+		return f, noLogReporter{p}
+	}
+	r := conformance.Check(t, h)
+	if len(r.Findings) != 0 {
+		t.Fatalf("không được có finding:%s", dump(r))
+	}
+	for _, code := range []string{"CHG-2", "CHG-2/grpc"} {
+		if !slices.ContainsFunc(r.Skipped, func(s string) bool {
+			return strings.HasPrefix(s, code+": ") && strings.Contains(s, "LogReporter")
+		}) {
+			t.Errorf("thiếu %s (nêu LogReporter) trong Skipped: %v", code, r.Skipped)
+		}
+	}
 }

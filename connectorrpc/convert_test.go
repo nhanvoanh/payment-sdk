@@ -79,7 +79,7 @@ func TestChargeRequest_RoundTrip(t *testing.T) {
 	in := connector.ChargeRequest{
 		TransactionCode: "TX1", IdempotencyKey: "idem", Money: paykit.Money{Amount: 5, Currency: "USD"},
 		Method: paykit.MethodVisa, Customer: cust, ReturnURL: "u1", CancelURL: "u2", ClientIP: "::1", Metadata: meta,
-		CreatedAt: tCreated,
+		CreatedAt: tCreated, PaymentCode: "CFPAYCODE7Q4X9K2M8ZT3",
 	}
 	assert.Equal(t, in, connectorrpc.ChargeRequestFromProto(wire(t, connectorrpc.ChargeRequestToProto(in))))
 	assert.Equal(t, connector.ChargeRequest{}, connectorrpc.ChargeRequestFromProto(wire(t, connectorrpc.ChargeRequestToProto(connector.ChargeRequest{}))))

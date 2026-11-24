@@ -1053,7 +1053,9 @@ type ChargeRequest struct {
 	ClientIp        string                 `protobuf:"bytes,8,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,9,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Thời điểm tạo giao dịch đã lưu. Thêm sau.
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Mã thanh toán khách đưa ra để quét. Thêm ở v0.2.0; bên cũ bỏ qua.
+	PaymentCode   string `protobuf:"bytes,11,opt,name=payment_code,json=paymentCode,proto3" json:"payment_code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1156,6 +1158,13 @@ func (x *ChargeRequest) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *ChargeRequest) GetPaymentCode() string {
+	if x != nil {
+		return x.PaymentCode
+	}
+	return ""
 }
 
 type ChargeResponse struct {
@@ -2336,7 +2345,7 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\vnext_action\x18\x05 \x01(\v2'.hasaki.payment.connector.v1.NextActionR\n" +
 	"nextAction\x129\n" +
 	"\n" +
-	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xa1\x04\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xc4\x04\n" +
 	"\rChargeRequest\x12)\n" +
 	"\x10transaction_code\x18\x01 \x01(\tR\x0ftransactionCode\x12'\n" +
 	"\x0fidempotency_key\x18\x02 \x01(\tR\x0eidempotencyKey\x128\n" +
@@ -2351,7 +2360,8 @@ const file_hasaki_payment_connector_v1_connector_proto_rawDesc = "" +
 	"\bmetadata\x18\t \x03(\v28.hasaki.payment.connector.v1.ChargeRequest.MetadataEntryR\bmetadata\x129\n" +
 	"\n" +
 	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x1a;\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12!\n" +
+	"\fpayment_code\x18\v \x01(\tR\vpaymentCode\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb3\x03\n" +

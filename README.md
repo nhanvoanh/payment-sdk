@@ -18,7 +18,7 @@ này mà không cần thấy core.
 ## Dùng SDK trong repo connector
 
 ```
-go get github.com/nhanvoanh/payment-sdk@v0.1.0
+go get github.com/nhanvoanh/payment-sdk@v0.2.0
 ```
 
 rồi import gói cần dùng, ví dụ `github.com/nhanvoanh/payment-sdk/connector`. `go.mod` của connector chỉ có
@@ -57,6 +57,12 @@ có khoá SSH: tải ở máy chủ rồi cho bước dựng đọc cache module
   core dựa vào) phải lên ít nhất một MINOR mới. Sửa lỗi không đổi hợp đồng: PATCH.
 - Không bao giờ dời hay đặt lại một tag đã đẩy lên: `go.sum` của mọi repo đã dùng nó ghi hash theo nội dung, tag đổi
   nội dung thì `go` báo lỗi kiểm hash. Cần sửa thì ra tag mới.
+
+`v0.2.0` (thêm, không đổi gì của `v0.1.0`; triển khai core trước, connector sau):
+
+- `connector.ChargeRequest.PaymentCode`: mã thanh toán khách đưa ra để quét, trên dây là `payment_code = 11` của `ChargeRequest`.
+- Luật `CHG-2` (mã thanh toán không lộ ra `Raw`, câu lỗi, `ProviderRef`, `NextAction`, log), `Harness.ChargeCode`, `conformance.LogReporter`.
+- `signing.RSAEncryptPKCS1v15` cho đối tác đòi gửi dữ liệu mã hoá RSA PKCS#1 v1.5.
 
 ## Phát triển SDK
 

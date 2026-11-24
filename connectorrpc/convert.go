@@ -292,6 +292,7 @@ func ChargeRequestToProto(r connector.ChargeRequest) *connectorpb.ChargeRequest 
 		Money: MoneyToProto(r.Money), Method: valid(string(r.Method)), Customer: CustomerToProto(r.Customer),
 		ReturnUrl: valid(r.ReturnURL), CancelUrl: valid(r.CancelURL), ClientIp: valid(r.ClientIP),
 		Metadata: mapToProto(r.Metadata), CreatedAt: TimeToProto(r.CreatedAt),
+		PaymentCode: valid(r.PaymentCode),
 	}
 }
 
@@ -302,6 +303,7 @@ func ChargeRequestFromProto(r *connectorpb.ChargeRequest) connector.ChargeReques
 		Customer:  CustomerFromProto(r.GetCustomer()),
 		ReturnURL: r.GetReturnUrl(), CancelURL: r.GetCancelUrl(), ClientIP: r.GetClientIp(),
 		Metadata: mapFromProto(r.GetMetadata()), CreatedAt: TimeFromProto(r.GetCreatedAt()),
+		PaymentCode: r.GetPaymentCode(),
 	}
 }
 

@@ -582,10 +582,18 @@ func checkCXL3(e *env) {
 	}
 }
 
+// chargeReq dựng ChargeRequest của tx; có Harness.ChargeCode thì mang mã nó trả (mỗi request một lần gọi), không thì
+// mã rỗng như core cũ hơn v0.2.0.
 func (e *env) chargeReq(tx string) connector.ChargeRequest {
 	r := e.createReq(tx)
+	var code string
+	if e.h.ChargeCode != nil {
+		code = e.h.ChargeCode(e.p)
+		e.usePayCode(code)
+	}
 	return connector.ChargeRequest{TransactionCode: tx, IdempotencyKey: r.IdempotencyKey, Money: r.Money, Method: r.Method,
-		Customer: r.Customer, ReturnURL: r.ReturnURL, CancelURL: r.CancelURL, ClientIP: r.ClientIP, CreatedAt: r.CreatedAt}
+		Customer: r.Customer, ReturnURL: r.ReturnURL, CancelURL: r.CancelURL, ClientIP: r.ClientIP, CreatedAt: r.CreatedAt,
+		PaymentCode: code}
 }
 
 // checkCHG1: Charge thu tiền trực tiếp nên luật tiền của Create (PAY-3..6) áp nguyên cho nó.

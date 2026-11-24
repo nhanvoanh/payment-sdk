@@ -67,6 +67,7 @@ Mã luật cố định, là hợp đồng với developer connector.
 | `QRY-3` | (có `query_payment`) `ModeHang` → như `PAY-4`. | Như `PAY-4`. |
 | `QRY-4` | (có `query_payment`) `ModeGarbage` → có lỗi (lỗi nào cũng được); `err == nil` là vi phạm dù `Found` là gì. | Với truy vấn, core coi mọi lỗi như nhau (truy vấn lại sau); err nil thì core tin kết quả bịa: `failed` khiến khách tạo lại thanh toán trong khi đối tác có thể đã thu, "không thấy" khiến giao dịch bị cho hết hạn. |
 | `CHG-1` | (có `charge`) `ModeDown` → như `PAY-3`; `ModeHang` → như `PAY-4`; `ModeReject` → như `PAY-5`; `ModeGarbage` → như `PAY-6`. | Charge thu tiền trực tiếp: báo "chắc chắn chưa xử lý" cho một lần treo thì core chốt thất bại trong khi thẻ của khách đã bị trừ. |
+| `CHG-2` | (có `charge`) Charge mang mã thanh toán (từ `Harness.ChargeCode`; không có thì mã canh của bộ luật) ở `ModeNormal`, `ModeReject`, `ModeGarbage`, rồi truy vấn giao dịch đó nếu có khai truy vấn. Mã (thô, JSON-escape, URL-encode, khác hoa thường) không được xuất hiện trong `RawExchange`, câu lỗi, `ProviderRef`, `NextAction`, mã/lời nhắn của đối tác, và log của connector (`LogReporter`). | Mã thanh toán khách đưa ra để quét mang quyền trừ tiền của khách; core lưu `Raw`, `ProviderRef`, `NextAction` và ghi câu lỗi vào log. |
 | `CXL-1` | (có `cancel`) sau `SetPaymentStatus(succeeded)`, huỷ **không** được trả `StatusCanceled` kèm `err == nil`. | Core huỷ đơn trong khi khách đã bị trừ tiền. |
 | `CXL-2` | (có `cancel`) `ModeHang` và `ModeGarbage` → câu trả lời hợp lệ **duy nhất** là lỗi core hiểu là "chưa rõ" (`ErrUnknownOutcome`). `err == nil` kèm trạng thái bất kỳ (kể cả `StatusPending`) là vi phạm, như `RejectedError` hay `ErrProviderUnavailable`. Lượt thêm (cần `Partner` cài `RequestCounter`, không cài thì lượt này vào `Skipped`): huỷ với `ProviderRef` rỗng ở `ModeHang`; bộ đếm được chụp ngay trước lời huỷ đó. `err == nil` kèm `StatusCanceled` luôn là vi phạm. Không request nào tới đối tác → quyết định tại chỗ: `RejectedError`, `ErrNotSupported`, `ErrProviderUnavailable` (chưa gửi gì), `nil` kèm trạng thái khác canceled đều được chấp nhận ở lượt này (ví dụ connector chỉ huỷ theo `ProviderRef`, xem `CXL-3`; riêng `ErrProviderUnavailable` vẫn bị `CXL-3` từ chối ở `ModeNormal`). Có request tới đối tác (kể cả request tới trễ tối đa 200 ms sau khi connector trả về) → như lượt có mã: chỉ "chưa rõ" hợp lệ, kể cả khi connector tự đặt timeout ngắn hơn hạn của luật. | Không ai biết đối tác đã huỷ chưa. Báo "đã huỷ" thì core huỷ đơn trong khi đối tác có thể vẫn thu tiền. Báo "bị từ chối", hoặc `nil` kèm trạng thái khác canceled (core xếp nó chung với "bị từ chối"), thì core tin đối tác nói rõ không huỷ và quyết theo một câu trả lời không có. Connector huỷ theo mã giao dịch khi thiếu `ProviderRef` hay mắc lỗi này. |
 | `CXL-3` | (có `cancel`) huỷ một giao dịch đối tác **không** biết, `ProviderRef` rỗng, ở `ModeNormal` → câu trả lời dứt khoát theo core: `err == nil` (trạng thái bất kỳ), lỗi core hiểu là từ chối (nên dùng `RejectedError`, ví dụ mã `cannot_cancel`), hoặc `ErrNotSupported`. Vi phạm: lỗi core hiểu là chưa rõ, hoặc `ErrProviderUnavailable`. | Core huỷ cả giao dịch mà Create chưa nghe được trả lời (chưa có `ProviderRef`). Trả "chưa rõ" hay "không gọi được" thì core không bao giờ cho giao dịch quá hạn hết hạn: đơn kẹt tới khi có người chốt tay, và mỗi lượt quét làm cầu chì đếm thêm một lỗi. `ErrProviderUnavailable` chỉ dành cho khi đã cố gọi đối tác mà không tới. |
@@ -102,6 +103,35 @@ dịch tạo bằng định dạng cũ đã kết thúc.
 đối tác giả của chính tác giả connector trả về — đối tác giả không nhắc lại khách (hay nhắc theo cách khác đối tác thật)
 thì `LOG-1` không bắt được connector quên che. Che bằng `providerhttp.RedactCustomer(body, khách)` hoặc `RedactValues(body, giá trị...)`.
 
+### Mã thanh toán (`ChargeRequest.PaymentCode`)
+
+Ở thanh toán tại quầy, thu ngân quét mã thanh toán khách đưa ra trên thiết bị của khách; core chuyển nó cho
+`Charge` trong `ChargeRequest.PaymentCode` (thêm ở `v0.2.0`). Mã sống ngắn, dùng một lần và mang quyền trừ tiền
+của khách: coi như thông tin xác thực. Chỉ `Charge` mang nó; một lần thu "chưa rõ" được chốt bằng truy vấn, không
+bao giờ bằng một lần `Charge` thứ hai.
+
+- **Mã rỗng** nghĩa là client không gửi hoặc core cũ hơn `v0.2.0`. Connector cần mã mà nhận rỗng thì trả
+  `&connector.RejectedError{Code: "payment_code_required"}` và KHÔNG gọi đối tác; không trả
+  `ErrProviderUnavailable` (lỗi đó tính vào bộ ngắt mạch, trong khi đây là lỗi của client). Thứ tự triển khai:
+  CORE TRƯỚC, connector sau.
+- **`Harness.ChargeCode`** (`func(p Partner) string`): đặt thì mọi `ChargeRequest` bộ luật dựng mang mã nó trả,
+  một lần gọi cho mỗi request (mã dùng một lần); trả mã đối tác giả sẽ chấp nhận, dài ít nhất 8 ký tự. Connector
+  từ chối Charge khi thiếu mã PHẢI đặt hook này: không có hook, mọi Charge ngoài `CHG-2` mang mã rỗng như core cũ,
+  connector từ chối tại chỗ và `CHG-1` hỏng (`ModeDown` đòi `ErrProviderUnavailable` mà nhận lời từ chối). Hook
+  chạy trong goroutine của luật, không phải goroutine của test: không gọi `tb.Fatal`/`FailNow`; panic thành vi phạm
+  của luật đang chạy. Không đặt thì connector hiện có thấy đúng các request như ở `v0.1.0`; riêng `CHG-2` dùng mã
+  canh của bộ luật.
+- **`conformance.LogReporter`** (`ConnectorLogs() string`, tuỳ chọn trên `Partner`): mọi thứ connector đã ghi log
+  từ lúc `Harness.New` dựng nó, lấy từ một bộ đệm mà developer nối vào logger của connector. Không cài thì `CHG-2`
+  chỉ kiểm giá trị trả về, và luật vào `Skipped` (khi không có vi phạm) với lý do nêu `LogReporter`.
+- Vi phạm của mọi luật không bao giờ in mã thanh toán đã trao cho connector (kể cả khi connector nhắc lại nó
+  trong câu lỗi hay giá trị panic): finding của `CHG-2` chỉ nêu thao tác, tình huống và chỗ lộ.
+
+Giới hạn cấu trúc, như `LOG-1`: `CHG-2` chỉ thấy những gì đối tác giả của chính tác giả connector trả về. Đối tác
+giả nên nhắc lại mã thô nó nhận được (sau khi giải mã, nếu đối tác thật giải mã) trong phản hồi như một đối tác
+thật có thể làm; không nhắc lại thì `CHG-2` không bắt được connector quên che. Che bằng
+`providerhttp.RedactValues(body, mã)` trước khi trả.
+
 ## Đối tác giả
 
 `Partner` do developer cài, thường bằng một `httptest.Server` đóng vai đối tác:
@@ -124,6 +154,8 @@ thì `LOG-1` không bắt được connector quên che. Che bằng `providerhttp
 - Tuỳ chọn `conformance.RefundRecorder` (`RefundCodes() []string`): mã hoàn (đúng như connector đặt trong request)
   của mọi lệnh hoàn đối tác giả đã NHẬN, theo thứ tự nhận. Nên cài khi connector khai `refund`: không cài thì lượt
   mã hoàn của `ID-4` bị bỏ (`Skipped`). Tách khỏi `RequestRecorder` để Partner cũ không phải đổi.
+- Tuỳ chọn `conformance.LogReporter` (`ConnectorLogs() string`): log connector đã ghi từ lúc `Harness.New`. Nên
+  cài khi connector khai `charge`: không cài thì phần log của `CHG-2` bị bỏ (`Skipped`). Xem mục mã thanh toán.
 - Tuỳ chọn `conformance.RequestCounter` (`BusinessRequests() int`): số request nghiệp vụ (không tính lấy
   token) đối tác giả đã nhận từ lúc tạo. Đếm ngay khi NHẬN request, trước khi treo hay trả lời, trên MỌI
   đường nghiệp vụ (tạo, truy vấn, huỷ, hoàn…); `ModeDown` không tính. Nên

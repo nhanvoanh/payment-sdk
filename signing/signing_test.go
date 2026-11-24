@@ -173,3 +173,54 @@ func TestParseRSAPrivateKeyPEM_ReportsBothErrors(t *testing.T) {
 		t.Fatalf("muốn cả hai lỗi PKCS#1 và PKCS#8, got %q", msg)
 	}
 }
+
+func TestRSAEncryptPKCS1v15(t *testing.T) {
+	k := genKey(t, 2048)
+	msg := []byte("CFPAYCODE7Q4X9K2M8ZT3")
+	ct, err := RSAEncryptPKCS1v15(&k.PublicKey, msg)
+	if err != nil {
+		t.Fatalf("mã hoá lỗi: %v", err)
+	}
+	if len(ct) != 256 {
+		t.Fatalf("bản mã %d byte, cần 256 với khoá 2048 bit", len(ct))
+	}
+	pt, err := rsa.DecryptPKCS1v15(rand.Reader, k, ct)
+	if err != nil || string(pt) != string(msg) {
+		t.Fatal("giải mã không ra thông điệp gốc")
+	}
+	ct2, err := RSAEncryptPKCS1v15(&k.PublicKey, msg)
+	if err != nil {
+		t.Fatalf("mã hoá lần hai lỗi: %v", err)
+	}
+	if string(ct2) == string(ct) {
+		t.Fatal("hai lần mã hoá phải cho hai bản mã khác nhau (đệm ngẫu nhiên)")
+	}
+
+	weak := genKey(t, 1024)
+	tooLong := []byte(strings.Repeat("Z", 246)) // tối đa 245 byte với khoá 2048 bit
+	cases := []struct {
+		name    string
+		pub     *rsa.PublicKey
+		msg     []byte
+		mention string
+	}{
+		{"khoá nil", nil, msg, ""},
+		{"N nil", &rsa.PublicKey{E: 65537}, msg, ""},
+		{"khoá 1024 bit", &weak.PublicKey, msg, "2048"},
+		{"thông điệp rỗng", &k.PublicKey, nil, ""},
+		{"thông điệp quá dài", &k.PublicKey, tooLong, ""},
+	}
+	for _, c := range cases {
+		ct, err := RSAEncryptPKCS1v15(c.pub, c.msg)
+		if err == nil || ct != nil {
+			t.Errorf("%s: phải lỗi và không trả bản mã", c.name)
+			continue
+		}
+		if c.mention != "" && !strings.Contains(err.Error(), c.mention) {
+			t.Errorf("%s: lỗi phải nêu %s: %v", c.name, c.mention, err)
+		}
+		if len(c.msg) > 0 && strings.Contains(err.Error(), string(c.msg)) {
+			t.Errorf("%s: câu lỗi chứa thông điệp", c.name)
+		}
+	}
+}

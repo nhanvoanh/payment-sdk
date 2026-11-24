@@ -154,6 +154,8 @@ message ChargeRequest {
   map<string, string> metadata = 9;
   // Thời điểm tạo giao dịch đã lưu. Thêm sau.
   google.protobuf.Timestamp created_at = 10;
+  // Mã thanh toán khách đưa ra để quét. Thêm ở v0.2.0; bên cũ bỏ qua.
+  string payment_code = 11;
 }
 
 message ChargeResponse {

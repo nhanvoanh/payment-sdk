@@ -89,7 +89,7 @@ func TestRoundTrip_AllNineOperations(t *testing.T) {
 
 	chreq := connector.ChargeRequest{TransactionCode: "T1", IdempotencyKey: "k2", Money: money, Method: paykit.MethodVisa,
 		Customer: cust, ReturnURL: "r", CancelURL: "c", ClientIP: "ip", Metadata: map[string]string{"x": "y"},
-		CreatedAt: tCreated}
+		CreatedAt: tCreated, PaymentCode: "CFPAYCODE7Q4X9K2M8ZT3"}
 	chres, err := c.Charge(ctx, chreq)
 	if err != nil || !reflect.DeepEqual(gotCharge, chreq) {
 		t.Fatalf("charge req: %+v err=%v", gotCharge, err)

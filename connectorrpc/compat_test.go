@@ -33,6 +33,7 @@ var addedFields = []struct {
 	{"CreateRefundRequest", "created_at", 9},
 	{"QueryRefundRequest", "created_at", 4},
 	{"QueryRefundRequest", "transaction_created_at", 5},
+	{"ChargeRequest", "payment_code", 11},
 }
 
 func TestProto_AddedFieldNumbers(t *testing.T) {
@@ -106,4 +107,22 @@ func TestProto_OldPeerIgnoresAddedFields(t *testing.T) {
 	assert.Empty(t, out.Customer.Address)
 	assert.True(t, out.CreatedAt.IsZero(), "core cũ không gửi thời điểm tạo: zero")
 	assert.Equal(t, cust.Name, out.Customer.Name)
+
+	// Mã thanh toán (thêm ở v0.2.0): connector cũ bỏ qua; core cũ gửi thì connector mới đọc ra rỗng.
+	chb, err := proto.Marshal(connectorrpc.ChargeRequestToProto(connector.ChargeRequest{TransactionCode: "TX1",
+		PaymentCode: "CFPAYCODE7Q4X9K2M8ZT3", CreatedAt: tCreated}))
+	require.NoError(t, err)
+	chmd := old.Messages().ByName("ChargeRequest")
+	chmsg := dynamicpb.NewMessage(chmd)
+	require.NoError(t, proto.Unmarshal(chb, chmsg))
+	assert.Equal(t, "TX1", chmsg.Get(chmd.Fields().ByName("transaction_code")).String())
+	assert.Nil(t, chmd.Fields().ByName("payment_code"), "lược đồ cũ không có payment_code")
+	chmsg.SetUnknown(nil)
+	chback, err := proto.Marshal(chmsg)
+	require.NoError(t, err)
+	var chgot connectorpb.ChargeRequest
+	require.NoError(t, proto.Unmarshal(chback, &chgot))
+	chout := connectorrpc.ChargeRequestFromProto(&chgot)
+	assert.Empty(t, chout.PaymentCode, "core cũ không gửi mã thanh toán: rỗng")
+	assert.Equal(t, "TX1", chout.TransactionCode)
 }

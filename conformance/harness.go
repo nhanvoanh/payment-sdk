@@ -18,6 +18,7 @@ import (
 	"github.com/nhanvoanh/payment-sdk/connectorrpc"
 	"github.com/nhanvoanh/payment-sdk/connectorrpc/grpctest"
 	"github.com/nhanvoanh/payment-sdk/paykit"
+	"github.com/nhanvoanh/payment-sdk/redact"
 )
 
 // Mode là cách đối tác giả cư xử ở lần gọi kế tiếp.
@@ -77,6 +78,13 @@ type RefundRecorder interface {
 	RefundCodes() []string
 }
 
+// LogReporter là phần tuỳ chọn của Partner: mọi thứ connector đang kiểm đã ghi log từ lúc Harness.New dựng nó, do
+// đối tác giả của developer trả từ một bộ đệm mà developer nối vào logger của connector. Partner cài nó thì CHG-2
+// kiểm log không mang mã thanh toán; không cài thì phần log của CHG-2 vào Skipped.
+type LogReporter interface {
+	ConnectorLogs() string
+}
+
 // Harness mô tả connector cần kiểm.
 type Harness struct {
 	New    func(tb testing.TB) (connector.Connector, Partner) // mỗi kiểm tra một cặp mới
@@ -84,6 +92,12 @@ type Harness struct {
 	Amount paykit.Money
 	// CreateCallsPartner sai nghĩa là tạo giao dịch chỉ ký tại chỗ: bỏ các kiểm tra Down/Hang/Reject/Garbage của Create.
 	CreateCallsPartner bool
+	// ChargeCode (tuỳ chọn) cấp mã thanh toán khách đưa ra để quét (ChargeRequest.PaymentCode): đặt thì MỌI
+	// ChargeRequest bộ luật dựng mang giá trị nó trả, gọi một lần cho mỗi request (mã chỉ dùng một lần); không đặt
+	// thì mã rỗng như core cũ, trừ CHG-2 dùng mã canh của bộ luật. Connector từ chối Charge khi thiếu mã thì phải
+	// đặt, nếu không CHG-1 hỏng. Trả mã mà đối tác giả sẽ chấp nhận, dài ít nhất 8 ký tự. Chạy trong goroutine của
+	// luật, không phải goroutine của test: không được gọi tb.Fatal/FailNow; panic thành finding của luật đang chạy.
+	ChargeCode func(p Partner) string
 }
 
 // Finding là một vi phạm: Rule là mã luật, Detail nêu điều thấy được, điều mong đợi và hậu quả.
@@ -161,12 +175,32 @@ type env struct {
 	mu         sync.Mutex
 	findings   []string
 	skip       string
-	notChecked string // lượt không kiểm được vì connector cư xử hợp lệ mà luật không quan sát được (vào Report.NotChecked)
+	notChecked string   // lượt không kiểm được vì connector cư xử hợp lệ mà luật không quan sát được (vào Report.NotChecked)
+	payCodes   []string // mã thanh toán lượt này đã trao cho connector; không bao giờ được in ra (xem hidePayCodes)
+}
+
+// usePayCode ghi nhận một mã thanh toán đã trao cho connector, để finding và lý do bỏ không bao giờ in nó.
+func (e *env) usePayCode(code string) {
+	if code == "" {
+		return
+	}
+	e.mu.Lock()
+	e.payCodes = append(e.payCodes, code)
+	e.mu.Unlock()
+}
+
+// hidePayCodes che mọi dạng của các mã thanh toán đã dùng trong s: finding có thể chứa giá trị panic hay câu lỗi
+// của connector, mà connector cẩu thả có thể nhắc lại mã trong đó. Gọi khi đang giữ e.mu.
+func (e *env) hidePayCodes(s string) string {
+	if len(e.payCodes) == 0 {
+		return s
+	}
+	return redact.Values(s, e.payCodes...)
 }
 
 func (e *env) fail(format string, args ...any) {
 	e.mu.Lock()
-	e.findings = append(e.findings, fmt.Sprintf(format, args...))
+	e.findings = append(e.findings, e.hidePayCodes(fmt.Sprintf(format, args...)))
 	e.mu.Unlock()
 }
 
@@ -174,13 +208,13 @@ func (e *env) fail(format string, args ...any) {
 // idempotency nên đối tác không nhận đủ request để so).
 func (e *env) notCheckedf(format string, args ...any) {
 	e.mu.Lock()
-	e.notChecked = fmt.Sprintf(format, args...)
+	e.notChecked = e.hidePayCodes(fmt.Sprintf(format, args...))
 	e.mu.Unlock()
 }
 
 func (e *env) skipf(format string, args ...any) {
 	e.mu.Lock()
-	e.skip = fmt.Sprintf(format, args...)
+	e.skip = e.hidePayCodes(fmt.Sprintf(format, args...))
 	e.mu.Unlock()
 }
 

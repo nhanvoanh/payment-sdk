@@ -37,6 +37,7 @@ var rules = []rule{
 	{id: "QRY-3", op: connector.OpQueryPayment, check: checkQRY3},
 	{id: "QRY-4", op: connector.OpQueryPayment, check: checkQRY4},
 	{id: "CHG-1", op: connector.OpCharge, check: checkCHG1},
+	{id: "CHG-2", op: connector.OpCharge, check: checkCHG2},
 	{id: "CXL-1", op: connector.OpCancel, check: checkCXL1},
 	{id: "CXL-2", op: connector.OpCancel, check: checkCXL2},
 	{id: "CXL-3", op: connector.OpCancel, check: checkCXL3},

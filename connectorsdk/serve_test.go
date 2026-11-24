@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -285,6 +286,49 @@ func TestServe_LogsNoBodies(t *testing.T) {
 	require.Contains(t, out, "duration")
 	require.NotContains(t, out, secret)
 	require.NotContains(t, strings.ToLower(out), "email")
+}
+
+// Mã thanh toán khách đưa ra để quét là thông tin xác thực: server không ghi nó ở bất kỳ mức log nào, kể cả khi
+// connector nhắc lại mã trong câu lỗi hay trong giá trị panic.
+func TestServe_LogsNeverCarryPaymentCode(t *testing.T) {
+	const code = "CFPAYCODE7Q4X9K2M8ZT3"
+	f := newFake()
+	var n int
+	var mu sync.Mutex
+	f.OnCharge = func(_ context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+		mu.Lock()
+		n++
+		i := n
+		mu.Unlock()
+		switch i {
+		case 1:
+			return connector.ChargeResult{ProviderRef: "pr1", Status: connector.StatusSucceeded}, nil
+		case 2:
+			return connector.ChargeResult{}, fmt.Errorf("%w: %s", connector.ErrUnknownOutcome, req.PaymentCode)
+		default:
+			panic("boom " + req.PaymentCode)
+		}
+	}
+	logs := &syncBuf{}
+	lg := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r := start(t, f, Options{Insecure: true, Logger: lg})
+	cl := connectorpb.NewConnectorServiceClient(plainClient(t, r.addr))
+	req := connectorrpc.ChargeRequestToProto(connector.ChargeRequest{TransactionCode: "T1", IdempotencyKey: "k1",
+		Money: paykit.Money{Amount: 1000, Currency: "VND"}, Method: paykit.MethodQR, PaymentCode: code})
+
+	_, err := cl.Charge(ctx5(t), req, grpc.WaitForReady(true))
+	require.NoError(t, err)
+	_, err = cl.Charge(ctx5(t), req, grpc.WaitForReady(true))
+	require.NoError(t, err) // lỗi nghiệp vụ nằm trong thân phản hồi
+	_, err = cl.Charge(ctx5(t), req, grpc.WaitForReady(true))
+	require.Equal(t, codes.Internal, status.Code(err))
+	if err != nil {
+		require.NotContains(t, err.Error(), code, "không lộ giá trị panic cho client")
+	}
+
+	out := logs.String()
+	require.GreaterOrEqual(t, strings.Count(out, "msg=rpc "), 3, "mỗi lời gọi có một dòng log rpc")
+	require.NotContains(t, out, code, "log của server không được mang mã thanh toán")
 }
 
 func TestServe_LogsErrorKind(t *testing.T) {

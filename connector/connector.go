@@ -205,6 +205,19 @@ type ChargeRequest struct {
 	Metadata                        map[string]string
 	// CreatedAt là thời điểm tạo giao dịch.
 	CreatedAt time.Time
+	// PaymentCode là mã thanh toán khách đưa ra để quét: chuỗi thô thu ngân quét từ thiết bị của khách, sống ngắn,
+	// dùng một lần và mang quyền trừ tiền của khách — coi như một thông tin xác thực.
+	//
+	// Chỉ Charge mang mã này; QueryPayment, CancelPayment, CreateRefund không bao giờ mang. Một lần thu "chưa rõ"
+	// được chốt bằng truy vấn, không bao giờ bằng một lần Charge thứ hai.
+	//
+	// Rỗng nghĩa là client không gửi mã hoặc core cũ hơn v0.2.0. Connector cần mã mà nhận rỗng thì trả
+	// &RejectedError{Code: "payment_code_required"} và không gọi đối tác; KHÔNG trả ErrProviderUnavailable (lỗi
+	// đó tính vào bộ ngắt mạch, trong khi đây là lỗi của client).
+	//
+	// Connector không bao giờ đặt giá trị này vào RawExchange, câu lỗi, ProviderRef, NextAction hay một dòng log,
+	// và chỉ gửi cho đối tác ở đúng dạng đối tác yêu cầu (luật CHG-2). Thêm ở v0.2.0.
+	PaymentCode string
 }
 
 type ChargeResult struct {
