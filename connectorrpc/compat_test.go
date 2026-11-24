@@ -117,6 +117,7 @@ func TestProto_OldPeerIgnoresAddedFields(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(chb, chmsg))
 	assert.Equal(t, "TX1", chmsg.Get(chmd.Fields().ByName("transaction_code")).String())
 	assert.Nil(t, chmd.Fields().ByName("payment_code"), "lược đồ cũ không có payment_code")
+	assert.NotEmpty(t, chmsg.GetUnknown(), "payment_code có trên dây, bên cũ giữ nó như trường lạ")
 	chmsg.SetUnknown(nil)
 	chback, err := proto.Marshal(chmsg)
 	require.NoError(t, err)

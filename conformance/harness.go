@@ -5,6 +5,7 @@ package conformance
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -189,11 +190,17 @@ func (e *env) usePayCode(code string) {
 	e.mu.Unlock()
 }
 
-// hidePayCodes che mọi dạng của các mã thanh toán đã dùng trong s: finding có thể chứa giá trị panic hay câu lỗi
-// của connector, mà connector cẩu thả có thể nhắc lại mã trong đó. Gọi khi đang giữ e.mu.
+// hidePayCodes che các mã thanh toán đã dùng trong s: finding có thể chứa giá trị panic hay câu lỗi của connector,
+// mà connector cẩu thả có thể nhắc lại mã trong đó. Lượt đầu thay đúng chuỗi con, mọi độ dài: redact bỏ qua giá trị
+// dưới 4 ký tự và coi 8–15 chữ số là điện thoại (không cắt giữa một nhóm số), nên mã toàn chữ số dính liền chữ số
+// khác sẽ lọt nếu chỉ dùng redact. Lượt sau dùng redact cho các dạng đã mã hoá (JSON-escape, URL-encode, hoa
+// thường). Gọi khi đang giữ e.mu.
 func (e *env) hidePayCodes(s string) string {
 	if len(e.payCodes) == 0 {
 		return s
+	}
+	for _, c := range e.payCodes {
+		s = strings.ReplaceAll(s, c, redact.Mask)
 	}
 	return redact.Values(s, e.payCodes...)
 }

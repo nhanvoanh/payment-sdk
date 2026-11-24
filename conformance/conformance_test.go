@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -2254,6 +2255,42 @@ var codeLeaks = map[string]codeLeak{
 			return st, err
 		}
 	},
+	"câu lỗi ModeDown (URL có mã)": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if p.currentMode() == conformance.ModeDown {
+			return res, fmt.Errorf("%w: Get \"https://pay.acme.example/c?code=%s\": dial tcp: connection refused", connector.ErrProviderUnavailable, req.PaymentCode)
+		}
+		return res, err
+	}),
+	"câu lỗi ModeHang (URL có mã)": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if p.currentMode() == conformance.ModeHang {
+			return res, fmt.Errorf("%w: Get \"https://pay.acme.example/c?code=%s\": context deadline exceeded", connector.ErrUnknownOutcome, req.PaymentCode)
+		}
+		return res, err
+	}),
+	"base64 lệch một byte trong Raw.RequestBody": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.Raw.RequestBody = `{"payload":"` + base64.StdEncoding.EncodeToString([]byte("x"+req.PaymentCode+"y")) + `"}`
+		}
+		return res, err
+	}),
+	"base64url không đệm trong Raw.ResponseBody": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.Raw.ResponseBody = "token=" + base64.RawURLEncoding.EncodeToString([]byte(req.PaymentCode))
+		}
+		return res, err
+	}),
+	"hex thường trong ProviderRef": onCharge(func(_ *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if err == nil {
+			res.ProviderRef = "acme_" + hex.EncodeToString([]byte(req.PaymentCode))
+		}
+		return res, err
+	}),
+	"hex hoa trong câu lỗi ModeReject": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
+		if p.currentMode() == conformance.ModeReject {
+			return res, &connector.RejectedError{Code: "R01", Message: "sai " + strings.ToUpper(hex.EncodeToString([]byte(req.PaymentCode)))}
+		}
+		return res, err
+	}),
 	"log của connector": onCharge(func(p *fakePartner, req connector.ChargeRequest, res connector.ChargeResult, err error) (connector.ChargeResult, error) {
 		p.logf("charge %s code=%s", req.TransactionCode, req.PaymentCode)
 		return res, err
@@ -2299,36 +2336,81 @@ func TestCheck_CHG2_FindingNeverPrintsCode(t *testing.T) {
 	}
 }
 
-// Có hook, connector nhắc lại mã trong một panic hay một lỗi sai loại: finding (của luật bất kỳ) không in mã.
+// Có hook, connector nhắc lại mã trong một panic hay một lỗi sai loại (dính liền chữ số khác): finding (của luật bất
+// kỳ) không in mã — kể cả mã toàn chữ số (redact coi 8–15 chữ số là điện thoại, không cắt giữa nhóm số) và mã ngắn.
 func TestCheck_HookCodeNeverInAnyFinding(t *testing.T) {
 	t.Parallel()
-	var mu sync.Mutex
-	var used []string
-	h := harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
-		f.OnCharge = func(_ context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
-			mu.Lock()
-			used = append(used, req.PaymentCode)
-			mu.Unlock()
-			if p.currentMode() == conformance.ModeNormal {
-				panic("boom " + req.PaymentCode)
+	numeric := func() func(conformance.Partner) string {
+		var n atomic.Int64
+		return func(conformance.Partner) string { return fmt.Sprintf("2812345%05d", n.Add(1)) } // 12 chữ số
+	}
+	short := func() func(conformance.Partner) string {
+		var n atomic.Int64
+		return func(conformance.Partner) string { return fmt.Sprintf("Q%02d", n.Add(1)%100) } // 3 ký tự
+	}
+	for name, hook := range map[string]func() func(conformance.Partner) string{"chữ và số": codeSeq, "12 chữ số": numeric, "3 ký tự": short} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var used []string
+			h := harness(func(f *connectortest.Fake, p *fakePartner) connector.Connector {
+				f.OnCharge = func(_ context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+					mu.Lock()
+					used = append(used, req.PaymentCode)
+					mu.Unlock()
+					if p.currentMode() == conformance.ModeNormal {
+						panic("boom ref=99" + req.PaymentCode + "77")
+					}
+					return connector.ChargeResult{}, errors.New("lỗi trơn ref=99" + req.PaymentCode + "77")
+				}
+				return f
+			})
+			h.ChargeCode = hook()
+			r := conformance.Check(t, h)
+			if !slices.Contains(rules(r), "CHG-1") {
+				t.Fatalf("connector hỏng phải có finding CHG-1; findings:%s", dump(r))
 			}
-			return connector.ChargeResult{}, errors.New("lỗi trơn cho mã " + req.PaymentCode)
+			mu.Lock()
+			defer mu.Unlock()
+			texts := append([]string(nil), r.Skipped...)
+			texts = append(texts, r.NotChecked...)
+			for _, f := range r.Findings {
+				texts = append(texts, f.Rule+": "+f.Detail)
+			}
+			for i, x := range texts {
+				for _, c := range used {
+					if c != "" && strings.Contains(x, c) {
+						t.Errorf("mục thứ %d của báo cáo in mã thanh toán", i) // không in chính mục đó
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+// Charge lỗi ở ModeNormal (đối tác giả từ chối mã canh): lượt thành công và lượt truy vấn của CHG-2 không kiểm được
+// gì; luật vào Skipped kèm lý do, không xanh im lặng.
+func TestCheck_CHG2_ChargeErrorAtNormal_Skipped(t *testing.T) {
+	t.Parallel()
+	r := conformance.Check(t, harness(func(f *connectortest.Fake, _ *fakePartner) connector.Connector {
+		good := f.OnCharge
+		f.OnCharge = func(ctx context.Context, req connector.ChargeRequest) (connector.ChargeResult, error) {
+			if req.PaymentCode != "" {
+				return connector.ChargeResult{}, &connector.RejectedError{Code: "invalid_code"}
+			}
+			return good(ctx, req)
 		}
 		return f
-	})
-	h.ChargeCode = codeSeq()
-	r := conformance.Check(t, h)
-	if !slices.Contains(rules(r), "CHG-1") {
-		t.Fatalf("connector hỏng phải có finding CHG-1; findings:%s", dump(r))
+	}))
+	if len(r.Findings) != 0 {
+		t.Fatalf("không được có finding:%s", dump(r))
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	for _, f := range r.Findings {
-		for _, c := range used {
-			if c != "" && strings.Contains(f.Detail, c) {
-				t.Errorf("finding %s in mã thanh toán", f.Rule)
-				break
-			}
+	for _, code := range []string{"CHG-2", "CHG-2/grpc"} {
+		if !slices.ContainsFunc(r.Skipped, func(s string) bool {
+			return strings.HasPrefix(s, code+": ") && strings.Contains(s, "ModeNormal")
+		}) {
+			t.Errorf("thiếu %s (nêu Charge lỗi ở ModeNormal) trong Skipped: %v", code, r.Skipped)
 		}
 	}
 }
