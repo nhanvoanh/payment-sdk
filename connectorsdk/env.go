@@ -7,12 +7,15 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nhanvoanh/payment-sdk/connector"
 	"github.com/nhanvoanh/payment-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/oteltrace"
 )
 
 // OptionsFromEnv đọc cấu hình từ biến môi trường:
@@ -63,6 +66,19 @@ func OptionsFromEnv(getenv func(string) string) (Options, error) {
 	return o, nil
 }
 
+// traceConfig dựng cấu hình tracing cho connector c; getenv thay os.Getenv để test.
+func traceConfig(c connector.Connector, getenv func(string) string) oteltrace.Config {
+	version := "unknown"
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		version = bi.Main.Version
+	}
+	return oteltrace.Config{
+		ServiceName:    "payment-connector-" + c.Name(),
+		ServiceVersion: version,
+		Environment:    getenv("CONNECTOR_ENV"),
+	}
+}
+
 // Main là điểm vào của tiến trình connector: đọc cấu hình từ môi trường, phục vụ tới khi nhận SIGINT/SIGTERM.
 // Lỗi thì ghi log và thoát với mã 1.
 func Main(c connector.Connector) {
@@ -70,7 +86,17 @@ func Main(c connector.Connector) {
 	if err == nil {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		err = Serve(ctx, c, o)
+		var shutdown func(context.Context) error
+		shutdown, err = oteltrace.Setup(ctx, traceConfig(c, os.Getenv))
+		if err == nil {
+			err = Serve(ctx, c, o)
+			// ctx đã huỷ khi tắt, nên flush span bằng ctx mới với hạn 2 giây.
+			sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if serr := shutdown(sctx); serr != nil {
+				slog.Warn("tracing shutdown failed", "error", serr)
+			}
+			cancel()
+		}
 	}
 	if err != nil {
 		slog.Error("connector dừng vì lỗi", "error", err)

@@ -33,11 +33,18 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"strconv"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/nhanvoanh/payment-sdk/connector"
+	"github.com/nhanvoanh/payment-sdk/oteltrace"
 )
 
 const (
@@ -153,10 +160,50 @@ func newClient(cfg Config, rt http.RoundTripper) (*Client, error) {
 // Do gửi req (dùng req.Context()) và đọc trọn phản hồi. Không theo redirect, không tự thử lại.
 // Thân request được đọc hết vào bộ nhớ trước khi gửi (tối đa MaxRequestBytes, trong hạn Timeout); lỗi ở
 // bước này là *Error bọc ErrProviderUnavailable vì chưa gửi gì.
-func (c *Client) Do(req *http.Request) (*Response, error) {
+func (c *Client) Do(req *http.Request) (resp *Response, err error) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(req.Context(), c.timeout)
 	defer cancel()
+
+	// Span gọi đối tác chỉ tạo khi ctx đã có span cha. Không bao giờ ghi query, header, thân hay err.Error()
+	// (URL đầy đủ nằm trong lỗi transport) và không chèn header propagation vào request gửi đối tác.
+	var reqSize, respSize int64
+	if oteltrace.HasParent(ctx) {
+		var span trace.Span
+		ctx, span = otel.Tracer(oteltrace.TracerName+"/providerhttp").Start(ctx, "HTTP "+req.Method,
+			trace.WithSpanKind(trace.SpanKindClient))
+		defer func() {
+			outcome := "ok"
+			switch {
+			case err == nil:
+			case errors.Is(err, connector.ErrProviderUnavailable):
+				outcome = "unavailable"
+			default:
+				outcome = "unknown"
+			}
+			attrs := []attribute.KeyValue{
+				attribute.String("http.request.method", req.Method),
+				attribute.String("server.address", req.URL.Hostname()),
+				attribute.Int("server.port", serverPort(req.URL.Scheme, req.URL.Port())),
+				attribute.String("url.path", req.URL.Path),
+			}
+			if resp != nil {
+				attrs = append(attrs, attribute.Int("http.response.status_code", resp.Status))
+			} else if st := lastStatus(err); st != 0 {
+				attrs = append(attrs, attribute.Int("http.response.status_code", st))
+			}
+			attrs = append(attrs,
+				attribute.Int64("http.request.body.size", reqSize),
+				attribute.Int64("http.response.body.size", respSize),
+				attribute.String("payment.call.outcome", outcome),
+			)
+			span.SetAttributes(attrs...)
+			if err != nil {
+				span.SetStatus(codes.Error, outcome)
+			}
+			span.End()
+		}()
+	}
 
 	raw := connector.RawExchange{}
 	// failUnsent: chứng cứ dương rằng chưa gửi gì.
@@ -173,6 +220,7 @@ func (c *Client) Do(req *http.Request) (*Response, error) {
 			return nil, failUnsent(err)
 		}
 		reqBody = b
+		reqSize = int64(len(b))
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, failUnsent(err)
@@ -205,26 +253,47 @@ func (c *Client) Do(req *http.Request) (*Response, error) {
 		return &Error{Raw: raw, err: fmt.Errorf("%w: %w", sentinel, cause)}
 	}
 
-	resp, err := c.hc.Do(out)
+	hresp, err := c.hc.Do(out)
 	if err != nil {
 		return nil, fail(err)
 	}
-	defer resp.Body.Close()
+	defer hresp.Body.Close()
 	// Đã có phản hồi thì chắc chắn đã gửi, dù transport không báo hook.
 	mark()
-	raw.HTTPStatus = resp.StatusCode
+	raw.HTTPStatus = hresp.StatusCode
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, c.maxResp+1))
+	body, err := io.ReadAll(io.LimitReader(hresp.Body, c.maxResp+1))
 	if err == nil && int64(len(body)) > c.maxResp {
 		body = body[:c.maxResp]
 		err = fmt.Errorf("providerhttp: thân phản hồi vượt %d byte", c.maxResp)
 	}
+	respSize = int64(len(body))
 	raw.ResponseBody = c.rawBody(body)
 	if err != nil {
 		return nil, fail(err)
 	}
 	raw.DurationMS = time.Since(start).Milliseconds()
-	return &Response{Status: resp.StatusCode, Header: resp.Header, Body: body, Raw: raw}, nil
+	return &Response{Status: hresp.StatusCode, Header: hresp.Header, Body: body, Raw: raw}, nil
+}
+
+// serverPort trả cổng của URL, mặc định theo scheme.
+func serverPort(scheme, port string) int {
+	if n, err := strconv.Atoi(port); err == nil {
+		return n
+	}
+	if scheme == "https" {
+		return 443
+	}
+	return 80
+}
+
+// lastStatus lấy mã trạng thái đã nhận (0 nếu chưa có phản hồi) từ lỗi của Do.
+func lastStatus(err error) int {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Raw.HTTPStatus
+	}
+	return 0
 }
 
 // readRequestBody đọc trọn thân trong hạn ctx. Đọc ở goroutine riêng để hạn có hiệu lực kể cả khi

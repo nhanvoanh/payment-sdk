@@ -43,6 +43,10 @@ nó làm điểm xuất phát cho connector của bạn. Nó ngắn có chủ ý
 
    Chỉ khi phát triển cục bộ mới đặt `CONNECTOR_INSECURE=true` (thay cho ba biến TLS); mặc định là TLS 1.3 và
    bắt buộc chứng chỉ client. `TestAcme_OverMTLS` là ví dụ chạy được của đúng đường này.
+   Tracing (tuỳ chọn, mặc định tắt): `CONNECTOR_ENV` (thành `deployment.environment.name`) và các biến `OTEL_*`
+   (`OTEL_TRACES_EXPORTER=otlp|console|none`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`,
+   `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`); xem mục
+   "Tracing (OpenTelemetry)" trong `README.md` ở gốc repo SDK.
    `CONNECTOR_MAX_CONCURRENT_STREAMS` (mặc định 1000, cho phép 100–100000) là số lời gọi đồng thời tối đa trên một
    kết nối gRPC; core giữ một kết nối tới mỗi địa chỉ connector, nên lời gọi vượt số này chờ ở phía core. Khoảng đó
    chỉ áp cho biến môi trường: `Options.MaxConcurrentStreams` đặt bằng code nhận mọi giá trị như trước (0 là 1000).

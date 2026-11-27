@@ -29,6 +29,7 @@ import (
 	"github.com/nhanvoanh/payment-sdk/connector"
 	"github.com/nhanvoanh/payment-sdk/connectorpb"
 	"github.com/nhanvoanh/payment-sdk/connectorrpc"
+	"github.com/nhanvoanh/payment-sdk/oteltrace"
 )
 
 const (
@@ -143,6 +144,7 @@ func ServeListener(ctx context.Context, c connector.Connector, o Options, lis ne
 		grpc.MaxConcurrentStreams(streams),
 		grpc.KeepaliveEnforcementPolicy(ka.enforce),
 		grpc.KeepaliveParams(ka.params),
+		connectorrpc.TracingServerOption(), // chỉ tạo span khi lời gọi mang traceparent hợp lệ; không bao giờ cho Describe/health
 		// Thứ tự: log ngoài cùng để thấy cả lời gọi bị từ chối và panic đã thành Internal. Kiểm tên chạy sau
 		// chứng chỉ và trước handler: core gọi nhầm tiến trình thì lời gọi bị từ chối khi chưa chạm connector.
 		grpc.ChainUnaryInterceptor(logInterceptor(log), authInterceptor(log, o.TLS != nil, allowed),
@@ -257,7 +259,9 @@ func logInterceptor(log *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 		start := time.Now()
 		resp, err := h(ctx, req)
-		log.Info("rpc", "rpc", info.FullMethod, "duration", time.Since(start), "error.kind", errorKind(resp, err))
+		attrs := append([]any{"rpc", info.FullMethod, "duration", time.Since(start), "error.kind", errorKind(resp, err)},
+			oteltrace.LogAttrs(ctx)...)
+		log.Info("rpc", attrs...)
 		return resp, err
 	}
 }

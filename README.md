@@ -18,7 +18,7 @@ này mà không cần thấy core.
 ## Dùng SDK trong repo connector
 
 ```
-go get github.com/nhanvoanh/payment-sdk@v0.2.0
+go get github.com/nhanvoanh/payment-sdk@v0.3.0
 ```
 
 rồi import gói cần dùng, ví dụ `github.com/nhanvoanh/payment-sdk/connector`. `go.mod` của connector chỉ có
@@ -63,6 +63,66 @@ có khoá SSH: tải ở máy chủ rồi cho bước dựng đọc cache module
 - `connector.ChargeRequest.PaymentCode`: mã thanh toán khách đưa ra để quét, trên dây là `payment_code = 11` của `ChargeRequest`.
 - Luật `CHG-2` (mã thanh toán không lộ ra `Raw`, câu lỗi, `ProviderRef`, `NextAction`, log), `Harness.ChargeCode`, `conformance.LogReporter`.
 - `signing.RSAEncryptPKCS1v15` cho đối tác đòi gửi dữ liệu mã hoá RSA PKCS#1 v1.5.
+
+`v0.3.0` (thêm, không đổi gì của `v0.2.0`, trừ việc `connectorsdk.Main` giờ báo lỗi lúc khởi động nếu `OTEL_TRACES_EXPORTER` hoặc biến giao thức OTLP có giá trị lạ; triển khai bên nào trước cũng được: lời gọi chưa mang trace thì chỉ là không có span):
+
+- Gói mới `oteltrace`: `Setup` dựng OpenTelemetry tracing (mặc định TẮT), `HasParent`, `LogAttrs`, `NewLogHandler`; bộ test
+  `oteltrace/oteltracetest` (`Install`, `Leaks`, chỉ dùng trong `_test.go`).
+- `connectorrpc.TracingDialOption(connector)` (client, cho core) và `connectorrpc.TracingServerOption()` (server).
+- `providerhttp`: span `HTTP <METHOD>` cho mỗi lời gọi đối tác, chỉ khi ctx đã có span cha.
+- `connectorsdk.Main` đọc `OTEL_*` và `CONNECTOR_ENV`, tự gọi `oteltrace.Setup` và xả span khi tắt; dòng log `rpc` có
+  `trace_id`/`span_id` khi lời gọi có trace. Chi tiết ở mục "Tracing (OpenTelemetry)".
+
+## Tracing (OpenTelemetry)
+
+Mặc định TẮT: `OTEL_TRACES_EXPORTER` không đặt hoặc `none` thì không có exporter và provider toàn cục không bị đụng tới.
+`connectorsdk.Main` gọi `oteltrace.Setup` cho connector; service đặt `service.name` là `payment-connector-<tên>`,
+`CONNECTOR_ENV` thành `deployment.environment.name`. Chỉ `OTEL_TRACES_EXPORTER` và các biến giao thức OTLP có giá trị lạ mới làm tiến trình báo lỗi lúc khởi động; giá trị không hợp lệ của biến khác (sampler, `OTEL_RESOURCE_ATTRIBUTES`) chỉ log WARN rồi dùng mặc định.
+Collector chết hay exporter lỗi không bao giờ làm hỏng lời gọi hay chặn khởi động; lỗi exporter chỉ log WARN
+`otel export error` tối đa một lần mỗi phút.
+
+| Biến | Ý nghĩa |
+|---|---|
+| `OTEL_TRACES_EXPORTER` | `none` (mặc định), `otlp`, `console` (in ra stderr, cho máy phát triển). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Địa chỉ collector (chuẩn OTel, exporter tự đọc). |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, rồi `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` (mặc định) hoặc `http/protobuf`; biến riêng cho trace thắng biến chung. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Lấy mẫu theo chuẩn OTel, ví dụ `parentbased_traceidratio` và `0.2`. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Ghi đè tên service và thuộc tính resource mà SDK đặt. |
+| `CONNECTOR_ENV` | Giá trị của `deployment.environment.name` (rỗng thì bỏ thuộc tính). |
+
+Cấu hình mẫu:
+
+```bash
+# Private cloud: SigNoz
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4317
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.2
+
+# AWS: ADOT collector (sidecar/daemon) -> X-Ray / CloudWatch
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+
+# Máy phát triển
+OTEL_TRACES_EXPORTER=console
+```
+
+Quy tắc "chỉ tạo span khi đã có span cha":
+
+- Phía client, `TracingDialOption` chỉ tạo span cho RPC nghiệp vụ khi ctx đã mang span context hợp lệ; span mang
+  `payment.connector=<tên>` và trace context đi theo header `traceparent` của gRPC.
+- Phía server, `TracingServerOption` chỉ tạo span khi metadata đến mang `traceparent` hợp lệ. Connector tự nó không bao
+  giờ mở trace mới.
+- `Describe` và health không bao giờ tạo span, ở cả hai phía.
+- `providerhttp` chỉ tạo span `HTTP <METHOD>` khi ctx đã có span cha (`oteltrace.HasParent`). Thuộc tính:
+  `http.request.method`, `server.address`, `server.port`, `url.path`, `http.response.status_code`, kích thước thân
+  request/response và `payment.call.outcome`. Không gửi `traceparent` cho đối tác.
+- Log: `oteltrace.LogAttrs(ctx)` và `oteltrace.NewLogHandler` thêm `trace_id`/`span_id` khi ctx có span; dưới
+  `logger.WithGroup(...)` hai trường này nằm trong nhóm. Dòng log `rpc` của `connectorsdk` tự mang chúng.
+
+KHÔNG BAO GIỜ ghi vào span: thân request/response, query của URL, header, dữ liệu khách, mã thanh toán, MAC, nội dung
+thông điệp gRPC, và câu lỗi của đối tác. Test của từng gói quét thuộc tính bằng giá trị canh (`oteltracetest.Leaks`).
 
 ## Phát triển SDK
 

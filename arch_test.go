@@ -147,7 +147,7 @@ func TestSDKRedactIsStdlibOnly(t *testing.T) {
 // là thư mục tương đối gốc repo. Giữ khớp với rule depguard "test-kits" trong .golangci.yml; core giữ luật tương ứng
 // cho mã của nó (internal/archtest).
 var testKits = []string{"conformance", "connectorrpc/grpctest", "connectorrpc/tlstest", "connectortest",
-	"template/acme/acmetest"}
+	"template/acme/acmetest", "oteltrace/oteltracetest"}
 
 // testKitUsers là các gói KHÔNG phải bộ-test nhưng được import ĐÚNG những bộ-test ghi kèm dù là file thường, mỗi
 // dòng một ngoại lệ hẹp có lý do: template/cmd/fakepartner chạy đối tác giả của mẫu (acmetest) thành tiến trình cho
