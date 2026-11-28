@@ -11,9 +11,10 @@ import (
 
 func (e *env) receiver() connector.WebhookReceiver { w, _ := e.c.(connector.WebhookReceiver); return w }
 
-// cloneRaw sao chép sâu để connector có sửa đầu vào cũng không ảnh hưởng lần gọi sau.
+// cloneRaw sao chép sâu để connector có sửa đầu vào cũng không ảnh hưởng lần gọi sau. Giữ MỌI trường của
+// RawWebhook (TestCloneRaw_PreservesEveryField đòi điều đó), kể cả RawQuery cho webhook dạng GET.
 func cloneRaw(r connector.RawWebhook) connector.RawWebhook {
-	out := connector.RawWebhook{Body: bytes.Clone(r.Body), RemoteIP: r.RemoteIP}
+	out := connector.RawWebhook{RawQuery: r.RawQuery, Body: bytes.Clone(r.Body), RemoteIP: r.RemoteIP}
 	if r.Headers != nil {
 		out.Headers = map[string][]string{}
 		for k, v := range r.Headers {
@@ -153,10 +154,12 @@ func checkWHK5(e *env) {
 	for i := range big {
 		big[i] = byte(r.Uint32())
 	}
+	// Hai ca dưới giữ header của webhook hợp lệ nhưng bỏ query thô (như trước v0.3.1, khi cloneRaw còn làm rơi
+	// RawQuery): webhook dạng GET mang dữ liệu đã ký trên query, giữ query thì vẫn là webhook hợp lệ.
 	emptyBody := cloneRaw(valid)
-	emptyBody.Body = nil
+	emptyBody.Body, emptyBody.RawQuery = nil, ""
 	bigBody := cloneRaw(valid)
-	bigBody.Body = big
+	bigBody.Body, bigBody.RawQuery = big, ""
 	cases := []struct {
 		name string
 		raw  connector.RawWebhook

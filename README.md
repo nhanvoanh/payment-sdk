@@ -18,7 +18,7 @@ này mà không cần thấy core.
 ## Dùng SDK trong repo connector
 
 ```
-go get github.com/nhanvoanh/payment-sdk@v0.3.0
+go get github.com/nhanvoanh/payment-sdk@v0.3.1
 ```
 
 rồi import gói cần dùng, ví dụ `github.com/nhanvoanh/payment-sdk/connector`. `go.mod` của connector chỉ có
@@ -72,6 +72,8 @@ có khoá SSH: tải ở máy chủ rồi cho bước dựng đọc cache module
 - `providerhttp`: span `HTTP <METHOD>` cho mỗi lời gọi đối tác, chỉ khi ctx đã có span cha.
 - `connectorsdk.Main` đọc `OTEL_*` và `CONNECTOR_ENV`, tự gọi `oteltrace.Setup` và xả span khi tắt; dòng log `rpc` có
   `trace_id`/`span_id` khi lời gọi có trace. Chi tiết ở mục "Tracing (OpenTelemetry)".
+
+`v0.3.1` (PATCH, sửa lỗi, không đổi hợp đồng): conformance không còn làm rơi `RawWebhook.RawQuery` khi sao chép webhook, nên connector nhận webhook dạng GET và kiểm chữ ký trên query thô qua được `WHK-1`..`WHK-4` (cả lượt gọi thẳng lẫn `/grpc`); kết quả của connector khác không đổi.
 
 ## Tracing (OpenTelemetry)
 
